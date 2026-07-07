@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+.env
+.DS_Store
+*.db
+solana_smart_money_bot/data/bot.db

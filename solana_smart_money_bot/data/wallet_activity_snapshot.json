@@ -1,0 +1,30 @@
+{
+  "api_errors": 0,
+  "buy_like_transactions": 31,
+  "buy_signals": 32,
+  "forward_signals": 0,
+  "generated_at_utc": "2026-07-04T11:19:00Z",
+  "parser_attempted": 500,
+  "parser_failed": 468,
+  "parser_succeeded": 32,
+  "rate_limit_errors": 0,
+  "rejection_breakdown": {},
+  "source": "test",
+  "total_active_wallets": 10,
+  "total_recent_transactions": 500,
+  "wallets": [
+    {
+      "buy_like": 0,
+      "last_seen": "n/a",
+      "parser_hits": 1,
+      "recent_txs": 50,
+      "score": 63.75,
+      "short_wallet": "abc",
+      "status": "active",
+      "wallet": "abc"
+    }
+  ],
+  "wallets_with_recent_transactions": 10,
+  "wallets_with_zero_recent_transactions": 0,
+  "zero_signals_cause": "insufficient_runtime_window"
+}
