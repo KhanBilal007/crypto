@@ -1,0 +1,311 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from decimal import Decimal
+from sqlite3 import Connection, IntegrityError
+from uuid import UUID
+
+import pytest
+
+from abtp.domain import (
+    Asset,
+    AssetPair,
+    AuditEvent,
+    AuditEventType,
+    Candle,
+    Exchange,
+    FeatureVector,
+    OrderBookLevel,
+    OrderBookSnapshot,
+    OrderIntent,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    PortfolioPosition,
+    PortfolioSnapshot,
+    Prediction,
+    PredictionHorizon,
+    RiskCheck,
+    RiskDecision,
+    RiskDecisionStatus,
+    Signal,
+    SignalDirection,
+    Trade,
+)
+from abtp.repositories import (
+    AuditRepository,
+    IntelligenceRepository,
+    MarketDataRepository,
+    OrderLifecycleEvent,
+    OrderRepository,
+    PortfolioSnapshotRepository,
+    RiskDecisionRepository,
+)
+
+NOW = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def fixture_pair() -> AssetPair:
+    return AssetPair(Asset("BTC", "Bitcoin"), Asset("USDT", "Tether USD"))
+
+
+def fixture_exchange() -> Exchange:
+    return Exchange("fixture")
+
+
+def fixture_signal() -> Signal:
+    return Signal(
+        source="fixture-strategy",
+        pair=fixture_pair(),
+        generated_at=NOW,
+        direction=SignalDirection.HOLD,
+        confidence=Decimal("0.60"),
+        inputs_ref="fixture:features:1",
+        rationale="Fixture signal.",
+    )
+
+
+def test_market_data_repository_round_trips_and_enforces_timestamp_uniqueness(
+    migrated_connection: Connection,
+) -> None:
+    repo = MarketDataRepository(migrated_connection)
+    candle = Candle(
+        exchange=fixture_exchange(),
+        pair=fixture_pair(),
+        interval="1m",
+        opened_at=NOW,
+        closed_at=datetime(2026, 1, 1, 0, 1, tzinfo=UTC),
+        open=Decimal("100"),
+        high=Decimal("110"),
+        low=Decimal("95"),
+        close=Decimal("105"),
+        volume=Decimal("1.5"),
+    )
+
+    repo.add_candle(candle, data_quality_flags={"gap": False})
+    stored = repo.get_candle(
+        exchange="fixture",
+        pair="BTC/USDT",
+        interval="1m",
+        opened_at=NOW.isoformat(),
+    )
+
+    assert stored == candle
+    with pytest.raises(IntegrityError):
+        repo.add_candle(candle)
+
+
+def test_market_data_repository_stores_order_books_and_trades(
+    migrated_connection: Connection,
+) -> None:
+    repo = MarketDataRepository(migrated_connection)
+    level = OrderBookLevel(price=Decimal("100"), quantity=Decimal("2"))
+    snapshot = OrderBookSnapshot(
+        exchange=fixture_exchange(),
+        pair=fixture_pair(),
+        captured_at=NOW,
+        bids=(level,),
+        asks=(OrderBookLevel(price=Decimal("101"), quantity=Decimal("1")),),
+        source_ref="fixture:book:1",
+    )
+    trade = Trade(
+        exchange=fixture_exchange(),
+        pair=fixture_pair(),
+        traded_at=NOW,
+        price=Decimal("100.5"),
+        quantity=Decimal("0.25"),
+        side=OrderSide.BUY,
+        trade_id="trade-1",
+    )
+
+    snapshot_id = repo.add_order_book(snapshot)
+    repo.add_trade(trade)
+
+    assert repo.get_order_book(snapshot_id) == snapshot
+    assert repo.get_trade(exchange="fixture", trade_id="trade-1") == trade
+
+
+def test_intelligence_repository_round_trips_features_predictions_and_signals(
+    migrated_connection: Connection,
+) -> None:
+    repo = IntelligenceRepository(migrated_connection)
+    pair = fixture_pair()
+    repo.add_indicator_value(
+        pair=pair.symbol,
+        generated_at=NOW,
+        indicator_name="sma_20",
+        indicator_value=Decimal("100.25"),
+        source_ref="fixture:candle:1",
+    )
+    features = FeatureVector(
+        pair=pair,
+        generated_at=NOW,
+        values={"sma_20": Decimal("100.25")},
+        inputs_ref="fixture:candle:1",
+        feature_version="features-v1",
+    )
+    prediction = Prediction(
+        pair=pair,
+        generated_at=NOW,
+        horizon=PredictionHorizon.INTRADAY,
+        expected_return=Decimal("0.01"),
+        confidence=Decimal("0.7"),
+        model_version="model-v1",
+        features_ref="fixture:features:1",
+        rationale="Fixture prediction.",
+    )
+    signal = Signal(
+        source="fixture-strategy",
+        pair=pair,
+        generated_at=NOW,
+        direction=SignalDirection.BUY,
+        confidence=Decimal("0.8"),
+        inputs_ref="fixture:prediction:1",
+        rationale="Fixture signal.",
+        prediction_ref="fixture:prediction:1",
+    )
+
+    feature_id = repo.add_feature_vector(features)
+    prediction_id = repo.add_prediction(prediction)
+    signal_id = repo.add_signal(signal)
+
+    assert repo.get_feature_vector(feature_id) == features
+    assert repo.get_prediction(prediction_id) == prediction
+    assert repo.get_signal(signal_id) == signal
+
+
+def test_decision_order_portfolio_and_audit_records_reconstruct_trade_decision(
+    migrated_connection: Connection,
+) -> None:
+    orders = OrderRepository(migrated_connection)
+    risks = RiskDecisionRepository(migrated_connection)
+    portfolios = PortfolioSnapshotRepository(migrated_connection)
+    audits = AuditRepository(migrated_connection)
+
+    signal = fixture_signal()
+    intent = OrderIntent(
+        pair=signal.pair,
+        side=OrderSide.BUY,
+        order_type=OrderType.MARKET,
+        quantity=Decimal("0.01"),
+        created_at=NOW,
+        signal=signal,
+        client_order_ref="fixture-order-1",
+    )
+    decision = RiskDecision(
+        order_intent_id=intent.id,
+        status=RiskDecisionStatus.REJECTED,
+        checks=(RiskCheck("max-position", False, "position limit exceeded"),),
+        evaluated_at=NOW,
+        policy_version="risk-v1",
+        rationale="Rejected fixture order.",
+        max_position_size=Decimal("0.005"),
+        stop_loss_required=True,
+        kill_switch_active=False,
+    )
+    snapshot = PortfolioSnapshot(
+        captured_at=NOW,
+        positions=(
+            PortfolioPosition(
+                asset=Asset("BTC"),
+                quantity=Decimal("0.5"),
+                valuation_quote=Asset("USDT"),
+                valuation=Decimal("50000"),
+            ),
+        ),
+        source_ref="fixture:portfolio:1",
+    )
+    audit = AuditEvent(
+        event_type=AuditEventType.RISK_DECISION,
+        occurred_at=NOW,
+        payload={
+            "order_intent_id": str(intent.id),
+            "risk_policy_version": decision.policy_version,
+        },
+        causation_id=intent.id,
+        correlation_id=UUID("00000000-0000-0000-0000-000000000008"),
+    )
+
+    orders.append_intent(intent)
+    risks.append(decision)
+    snapshot_id = portfolios.add_snapshot(snapshot)
+    audits.append(audit)
+    orders.append_lifecycle_event(
+        OrderLifecycleEvent(
+            order_intent_id=intent.id,
+            status=OrderStatus.RISK_REJECTED,
+            occurred_at=NOW,
+            realized_pnl=Decimal("0"),
+            unrealized_pnl=Decimal("0"),
+            payload={"reason": "risk rejected"},
+        )
+    )
+
+    assert orders.get_intent(str(intent.id)) == intent
+    assert risks.list_for_order(str(intent.id)) == (decision,)
+    assert portfolios.get_snapshot(snapshot_id) == snapshot
+    assert audits.list_by_correlation(str(audit.correlation_id)) == (audit,)
+    assert orders.list_lifecycle_events(str(intent.id))[0].status is OrderStatus.RISK_REJECTED
+
+
+def test_append_only_tables_reject_update_and_delete(migrated_connection: Connection) -> None:
+    audit = AuditEvent(
+        event_type=AuditEventType.ORDER_INTENT,
+        occurred_at=NOW,
+        payload={"order_intent_id": "fixture"},
+    )
+    event_id = AuditRepository(migrated_connection).append(audit)
+
+    with pytest.raises(IntegrityError, match="append-only"):
+        migrated_connection.execute(
+            "UPDATE audit_events SET event_type = 'changed' WHERE id = ?",
+            (event_id,),
+        )
+    with pytest.raises(IntegrityError, match="append-only"):
+        migrated_connection.execute("DELETE FROM audit_events WHERE id = ?", (event_id,))
+
+
+def test_secret_like_payload_keys_are_rejected_without_value_leakage(
+    migrated_connection: Connection,
+) -> None:
+    secret_value = "do-not-store-this"
+    event = AuditEvent(
+        event_type=AuditEventType.MARKET_INPUT,
+        occurred_at=NOW,
+        payload={"api_key": secret_value},
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        AuditRepository(migrated_connection).append(event)
+
+    message = str(exc_info.value)
+    assert "api_key" in message
+    assert secret_value not in message
+
+
+def test_order_client_reference_is_unique(migrated_connection: Connection) -> None:
+    repo = OrderRepository(migrated_connection)
+    signal = fixture_signal()
+
+    first = OrderIntent(
+        pair=signal.pair,
+        side=OrderSide.BUY,
+        order_type=OrderType.MARKET,
+        quantity=Decimal("0.01"),
+        created_at=NOW,
+        signal=signal,
+        client_order_ref="same-ref",
+    )
+    second = OrderIntent(
+        pair=signal.pair,
+        side=OrderSide.SELL,
+        order_type=OrderType.MARKET,
+        quantity=Decimal("0.01"),
+        created_at=NOW,
+        signal=signal,
+        client_order_ref="same-ref",
+    )
+
+    repo.append_intent(first)
+    with pytest.raises(IntegrityError):
+        repo.append_intent(second)
