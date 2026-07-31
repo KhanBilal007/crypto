@@ -1,5 +1,16 @@
 # Architecture
 
+## Trader-Ready Adaptive UI
+
+The trader-facing dashboard upgrade is documented in
+[`docs/trader_ready_adaptive_ui_plan.md`](trader_ready_adaptive_ui_plan.md).
+Stages A-F are implemented: the local paper dashboard now has Beginner,
+Advanced Trader, and Strategy Lab UI modes, SQLite-backed paper ledger
+persistence, CSV/report exports, and a Trader Readiness Gate that verifies view
+coverage, paper-safe routes, and simulated trade reconstructability. UI mode and
+strategy selection remain separate from trading permissions and cannot enable
+live trading.
+
 ## Stage Scope
 
 Stage 005 established the ABTP repository structure, shared vocabulary, coding

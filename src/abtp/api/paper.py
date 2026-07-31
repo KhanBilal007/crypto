@@ -257,12 +257,29 @@ class PaperTradingAPI:
         reason: str,
         updated_at: datetime,
     ) -> PaperControlState:
-        """Activate the paper kill switch; Stage 028 does not expose clearing it."""
+        """Activate the paper kill switch."""
 
         return self._update_control(
             context,
             paused=True,
             kill_switch_active=True,
+            reason=reason,
+            updated_at=updated_at,
+        )
+
+    def clear_kill_switch(
+        self,
+        context: PaperAPIRequestContext,
+        *,
+        reason: str,
+        updated_at: datetime,
+    ) -> PaperControlState:
+        """Clear the paper kill switch from the operator control surface."""
+
+        return self._update_control(
+            context,
+            paused=False,
+            kill_switch_active=False,
             reason=reason,
             updated_at=updated_at,
         )

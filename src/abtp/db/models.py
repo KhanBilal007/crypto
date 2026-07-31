@@ -25,6 +25,13 @@ class Tables:
     PORTFOLIO_SNAPSHOTS = "portfolio_snapshots"
     POSITIONS = "positions"
     AUDIT_EVENTS = "audit_events"
+    PAPER_ACCOUNT_SNAPSHOTS = "paper_account_snapshots"
+    PAPER_TRANSACTIONS = "paper_transactions"
+    PAPER_STRATEGY_EVALUATIONS = "paper_strategy_evaluations"
+    PAPER_RISK_DECISIONS = "paper_risk_decisions"
+    PAPER_SIMULATED_FILLS = "paper_simulated_fills"
+    PAPER_OPERATOR_ACTIONS = "paper_operator_actions"
+    PAPER_PREFERENCES = "paper_preferences"
 
 
 DbRow = Row

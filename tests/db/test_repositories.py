@@ -38,6 +38,7 @@ from abtp.repositories import (
     MarketDataRepository,
     OrderLifecycleEvent,
     OrderRepository,
+    PaperDashboardRepository,
     PortfolioSnapshotRepository,
     RiskDecisionRepository,
 )
@@ -309,3 +310,129 @@ def test_order_client_reference_is_unique(migrated_connection: Connection) -> No
     repo.append_intent(first)
     with pytest.raises(IntegrityError):
         repo.append_intent(second)
+
+
+def test_paper_dashboard_repository_round_trips_ledger_payload(
+    migrated_connection: Connection,
+) -> None:
+    repo = PaperDashboardRepository(migrated_connection)
+    payload = {
+        "version": 2,
+        "updated_at": NOW.isoformat(),
+        "market_data_source": "demo",
+        "ui_preferences": {
+            "mode": "strategy_lab",
+            "strategy_lab": {
+                "strategy": "min_risk_spot_v1",
+                "symbol": "BTC/USDT",
+                "timeframe": "4h",
+                "run_mode": "backtest",
+                "parameter_profile": "defensive",
+            },
+        },
+        "account": {
+            "cash": "9990",
+            "base_quantity": "0.01",
+            "average_entry_price": "100",
+            "realized_pnl": "0",
+            "fees_paid": "0.10",
+            "equity_history": ["10000", "9991"],
+        },
+        "trades": [
+            {
+                "order_intent_id": "00000000-0000-0000-0000-000000000001",
+                "side": "buy",
+                "quantity": "0.01",
+                "price": "100",
+                "fee_paid": "0.10",
+                "occurred_at": NOW.isoformat(),
+            }
+        ],
+    }
+
+    repo.save_state_payload(
+        payload,
+        strategy_evaluations=[
+            {
+                "strategy_name": "min_risk_spot_v1",
+                "strategy_version": "stage-021.v1",
+                "signal_direction": "buy",
+                "generated_at": NOW.isoformat(),
+            }
+        ],
+        risk_decisions=[
+            {
+                "order_intent_id": "00000000-0000-0000-0000-000000000001",
+                "status": "approved",
+                "evaluated_at": NOW.isoformat(),
+            }
+        ],
+        simulated_fills=[
+            {
+                "order_intent_id": "00000000-0000-0000-0000-000000000001",
+                "side": "buy",
+                "quantity": "0.01",
+                "price": "100",
+                "fee_paid": "0.10",
+                "occurred_at": NOW.isoformat(),
+            }
+        ],
+        operator_actions=[
+            {
+                "event_type": "approve_paper_trade",
+                "message": "approved",
+                "reason": "fixture",
+                "occurred_at": NOW.isoformat(),
+            }
+        ],
+    )
+
+    restored = repo.load_latest_state_payload()
+
+    assert restored is not None
+    assert restored["account"]["cash"] == "9990"  # type: ignore[index]
+    assert repo.list_transactions()[0]["quantity"] == "0.01"
+    assert migrated_connection.execute("SELECT COUNT(*) FROM paper_preferences").fetchone()[0] == 6
+    assert (
+        migrated_connection.execute("SELECT COUNT(*) FROM paper_strategy_evaluations").fetchone()[0]
+        == 1
+    )
+    assert (
+        migrated_connection.execute("SELECT COUNT(*) FROM paper_risk_decisions").fetchone()[0] == 1
+    )
+    assert (
+        migrated_connection.execute("SELECT COUNT(*) FROM paper_simulated_fills").fetchone()[0] == 1
+    )
+    assert (
+        migrated_connection.execute("SELECT COUNT(*) FROM paper_operator_actions").fetchone()[0]
+        == 1
+    )
+
+
+def test_paper_ledger_tables_are_append_only(migrated_connection: Connection) -> None:
+    repo = PaperDashboardRepository(migrated_connection)
+    payload = {
+        "version": 2,
+        "updated_at": NOW.isoformat(),
+        "market_data_source": "demo",
+        "ui_preferences": {"mode": "beginner"},
+        "account": {
+            "cash": "10000",
+            "base_quantity": "0",
+            "average_entry_price": "0",
+            "realized_pnl": "0",
+            "fees_paid": "0",
+            "equity_history": ["10000"],
+        },
+        "trades": [],
+    }
+    repo.save_state_payload(payload)
+    snapshot_id = migrated_connection.execute(
+        "SELECT id FROM paper_account_snapshots LIMIT 1"
+    ).fetchone()["id"]
+
+    with pytest.raises(IntegrityError, match="append-only"):
+        migrated_connection.execute(
+            "UPDATE paper_account_snapshots SET cash = '1' WHERE id = ?",
+            (snapshot_id,),
+        )

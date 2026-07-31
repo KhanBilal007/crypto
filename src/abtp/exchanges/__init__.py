@@ -9,6 +9,7 @@ from abtp.exchanges.base import (
     RateLimitState,
     Ticker,
 )
+from abtp.exchanges.binance import BinanceSpotMarketDataAdapter, BinanceSpotMarketDataConfig
 from abtp.exchanges.errors import (
     ExchangeAdapterError,
     InvalidSymbolError,
@@ -23,6 +24,8 @@ from abtp.exchanges.sandbox import SandboxExchangeAdapter
 
 __all__ = [
     "Balance",
+    "BinanceSpotMarketDataAdapter",
+    "BinanceSpotMarketDataConfig",
     "ExchangeAdapter",
     "ExchangeAdapterError",
     "ExchangeMode",

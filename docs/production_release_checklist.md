@@ -20,6 +20,26 @@ for unsupervised live trading.
       pause for review, or future tiny-live proposal eligibility without
       enabling live trading.
 
+## Trader-Ready Adaptive UI
+
+- [x] Stage A Adaptive View Shell implemented with persisted UI mode
+      preference.
+- [x] Stage B Beginner View implemented with plain-language command, portfolio,
+      transaction, and glossary sections.
+- [x] Stage C Advanced Trader View implemented with chart payload, metrics,
+      exit review, and exports.
+- [x] Stage D Strategy Lab implemented with strategy profile routing,
+      selectors, required evidence, and run comparison.
+- [x] Stage E Persistence Upgrade implemented with SQLite paper ledger tables
+      and JSON fallback/export compatibility.
+- [x] Stage F Trader Readiness Gate implemented at `/api/readiness` and in the
+      dashboard UI.
+- [x] Adaptive UI acceptance gate passed on 2026-08-01: full `pytest`, Ruff
+      format/check, and mypy over `src`.
+- [x] Generated runtime dashboard files are local artifacts and are ignored by
+      git: `docs/paper_dashboard.sqlite` and
+      `docs/paper_dashboard_state.json`.
+
 ## Minimum-Risk Gates
 
 - [ ] `SAFE_MODE=true` by default.
@@ -46,11 +66,13 @@ for unsupervised live trading.
 
 ## Documentation
 
+- [x] `docs/trader_ready_adaptive_ui_plan.md` reviewed for beginner,
+      advanced-trader, and strategy-specific dashboard behavior.
 - [ ] `docs/final_integration.md` reviewed.
 - [ ] `docs/user_guide.md` reviewed.
 - [ ] `docs/deployment.md` reviewed.
 - [ ] `docs/incident_response.md` reviewed.
-- [ ] `docs/architecture.md` matches the current stage.
+- [x] `docs/architecture.md` matches the current stage.
 - [ ] `docs/institutional_decision_hub.md` reviewed.
 - [ ] `docs/simple_paper_command_center.md` reviewed.
 - [ ] `docs/paper_trading_runner.md` reviewed.

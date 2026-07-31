@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal
@@ -89,6 +90,16 @@ class PaperTradingAccount:
     @property
     def trades(self) -> tuple[PaperTrade, ...]:
         return tuple(self._trades)
+
+    def restore_state(
+        self,
+        state: PaperAccountState,
+        trades: Sequence[PaperTrade] = (),
+    ) -> None:
+        """Restore a trusted persisted simulated account snapshot."""
+
+        self._state = state
+        self._trades = list(trades)
 
     def equity(self, price: Decimal) -> Decimal:
         """Return mark-to-market account equity."""

@@ -14,6 +14,7 @@ from abtp.dashboard.paper import (
 )
 from abtp.dashboard.paper_app import (
     DashboardAction,
+    DashboardUIMode,
     PaperDashboardActionError,
     PaperDashboardController,
     build_default_paper_dashboard_controller,
@@ -24,6 +25,7 @@ __all__ = [
     "DashboardPanel",
     "DashboardRow",
     "DashboardAction",
+    "DashboardUIMode",
     "PaperCommandCenterDashboardView",
     "PaperDashboardActionError",
     "PaperDashboardController",
