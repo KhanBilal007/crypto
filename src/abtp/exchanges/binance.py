@@ -19,6 +19,8 @@ from abtp.domain import (
     OrderBookLevel,
     OrderBookSnapshot,
     OrderIntent,
+    OrderSide,
+    Trade,
 )
 from abtp.exchanges.base import (
     Balance,
@@ -32,6 +34,9 @@ from abtp.exchanges.errors import InvalidSymbolError, UnsupportedOperationError
 
 BINANCE_SPOT_BASE_URL = "https://api.binance.com"
 BTC_USDT = AssetPair(Asset("BTC"), Asset("USDT"))
+ETH_USDT = AssetPair(Asset("ETH"), Asset("USDT"))
+SOL_USDT = AssetPair(Asset("SOL"), Asset("USDT"))
+BINANCE_SPOT_PAIRS = (BTC_USDT, ETH_USDT, SOL_USDT)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +62,7 @@ class BinanceSpotMarketDataAdapter:
 
     def __init__(self, config: BinanceSpotMarketDataConfig | None = None) -> None:
         self._config = config or BinanceSpotMarketDataConfig()
-        self._symbols = (_btc_usdt_symbol(),)
+        self._symbols = tuple(_spot_symbol(pair) for pair in BINANCE_SPOT_PAIRS)
 
     @property
     def name(self) -> str:
@@ -109,25 +114,35 @@ class BinanceSpotMarketDataAdapter:
     def order_book(self, pair: AssetPair) -> OrderBookSnapshot:
         self._require_symbol(pair)
         captured_at = datetime.now(UTC)
-        payload = self._get_json("/api/v3/ticker/bookTicker", {"symbol": _binance_symbol(pair)})
+        payload = self._get_json(
+            "/api/v3/depth",
+            {"symbol": _binance_symbol(pair), "limit": "10"},
+        )
         return OrderBookSnapshot(
             exchange=Exchange(self.name),
             pair=pair,
             captured_at=captured_at,
-            bids=(
-                OrderBookLevel(
-                    price=_decimal_field(payload, "bidPrice"),
-                    quantity=_decimal_field(payload, "bidQty"),
-                ),
-            ),
-            asks=(
-                OrderBookLevel(
-                    price=_decimal_field(payload, "askPrice"),
-                    quantity=_decimal_field(payload, "askQty"),
-                ),
-            ),
+            bids=_order_book_levels(payload, "bids"),
+            asks=_order_book_levels(payload, "asks"),
             source_ref=f"binance:spot:book:{pair.symbol}:{captured_at.isoformat()}",
         )
+
+    def trades(self, pair: AssetPair, start: datetime, end: datetime) -> tuple[Trade, ...]:
+        """Return recent public aggregate trades for spot market observation."""
+
+        self._require_symbol(pair)
+        if end <= start:
+            raise ValueError("trade end must be after start")
+        payload = self._get_json_array(
+            "/api/v3/aggTrades",
+            {
+                "symbol": _binance_symbol(pair),
+                "startTime": str(_to_millis(start)),
+                "endTime": str(_to_millis(end)),
+                "limit": "20",
+            },
+        )
+        return tuple(_agg_trade_to_trade(pair, item) for item in payload[-20:])
 
     def submit_order(self, _intent: OrderIntent) -> ExchangeOrder:
         raise UnsupportedOperationError("Binance adapter is market-data-only in paper dashboard")
@@ -160,13 +175,13 @@ class BinanceSpotMarketDataAdapter:
         return payload
 
     def _require_symbol(self, pair: AssetPair) -> None:
-        if pair.symbol != BTC_USDT.symbol:
+        if pair.symbol not in {item.symbol for item in BINANCE_SPOT_PAIRS}:
             raise InvalidSymbolError(f"unsupported Binance paper symbol: {pair.symbol}")
 
 
-def _btc_usdt_symbol() -> ExchangeSymbol:
+def _spot_symbol(pair: AssetPair) -> ExchangeSymbol:
     return ExchangeSymbol(
-        pair=BTC_USDT,
+        pair=pair,
         tick_size=Decimal("0.01"),
         lot_size=Decimal("0.00001"),
         min_order_size=Decimal("0.00001"),
@@ -184,6 +199,18 @@ def _decimal_field(payload: Mapping[str, Any], field: str) -> Decimal:
     if value is None:
         raise ValueError(f"Binance response missing {field}")
     return Decimal(str(value))
+
+
+def _order_book_levels(payload: Mapping[str, Any], side: str) -> tuple[OrderBookLevel, ...]:
+    raw_levels = payload.get(side)
+    if not isinstance(raw_levels, list) or not raw_levels:
+        raise ValueError(f"Binance depth response missing {side}")
+    levels = []
+    for item in raw_levels:
+        if not isinstance(item, list | tuple) or len(item) < 2:
+            raise ValueError(f"Binance depth {side} level is malformed")
+        levels.append(OrderBookLevel(price=Decimal(str(item[0])), quantity=Decimal(str(item[1]))))
+    return tuple(levels)
 
 
 def _kline_to_candle(pair: AssetPair, interval: str, item: Any) -> Candle:
@@ -207,3 +234,23 @@ def _kline_to_candle(pair: AssetPair, interval: str, item: Any) -> Candle:
 
 def _from_millis(value: Any) -> datetime:
     return datetime.fromtimestamp(int(value) / 1000, UTC)
+
+
+def _to_millis(value: datetime) -> int:
+    active = value.astimezone(UTC) if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    return int(active.timestamp() * 1000)
+
+
+def _agg_trade_to_trade(pair: AssetPair, item: Any) -> Trade:
+    if not isinstance(item, Mapping):
+        raise ValueError("Binance aggregate trade item is malformed")
+    is_buyer_maker = bool(item.get("m", False))
+    return Trade(
+        exchange=Exchange("binance"),
+        pair=pair,
+        traded_at=_from_millis(item["T"]),
+        price=Decimal(str(item["p"])),
+        quantity=Decimal(str(item["q"])),
+        side=OrderSide.SELL if is_buyer_maker else OrderSide.BUY,
+        trade_id=str(item["a"]),
+    )

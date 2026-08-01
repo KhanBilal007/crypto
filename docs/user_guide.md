@@ -65,6 +65,7 @@ Start with:
 - `docs/architecture.md` for module boundaries
 - `docs/final_integration.md` for the integrated lifecycle
 - `docs/production_release_checklist.md` for readiness gates
+- `docs/trader_review_handoff.md` for paper-mode trader review handoff
 - `docs/incident_response.md` for stop and recovery steps
 - `docs/source_material/ABTP_Sequential_Codex_Execution_Plan.md` for the staged
   implementation source plan

@@ -11,12 +11,29 @@ from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 from sqlite3 import Connection
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from abtp.api import PaperAPIRequestContext, PaperAPIRole, PaperStatusResponse, PaperTradingAPI
+from abtp.api import (
+    PaperAPIRequestContext,
+    PaperAPIRole,
+    PaperParameterHealth,
+    PaperStatusResponse,
+    PaperTradingAPI,
+)
 from abtp.data import OrderBookMetrics, StreamHealth, calculate_order_book_metrics
 from abtp.db import apply_migrations, connect_database
-from abtp.domain import Asset, AssetPair, Candle, Exchange, OrderSide, Signal, SignalDirection
+from abtp.domain import (
+    Asset,
+    AssetPair,
+    Candle,
+    Exchange,
+    OrderBookLevel,
+    OrderBookSnapshot,
+    OrderSide,
+    Signal,
+    SignalDirection,
+    Trade,
+)
 from abtp.domain.models import JsonValue
 from abtp.exchanges import BinanceSpotMarketDataAdapter, ExchangeAdapterError
 from abtp.paper import (
@@ -42,6 +59,16 @@ from abtp.strategies import (
 DECIMAL_ZERO = Decimal("0")
 DEFAULT_NOW = datetime(2026, 1, 1, tzinfo=UTC)
 PAIR = AssetPair(Asset("BTC"), Asset("USDT"))
+WATCHLIST_PAIRS = (
+    AssetPair(Asset("BTC"), Asset("USDT")),
+    AssetPair(Asset("ETH"), Asset("USDT")),
+    AssetPair(Asset("SOL"), Asset("USDT")),
+)
+WATCHLIST_DEMO_PRICES = {
+    "BTC/USDT": Decimal("104"),
+    "ETH/USDT": Decimal("3120"),
+    "SOL/USDT": Decimal("168"),
+}
 READ_CONTEXT = PaperAPIRequestContext("paper-dashboard", frozenset({PaperAPIRole.READ}))
 CONTROL_CONTEXT = PaperAPIRequestContext(
     "paper-dashboard-operator",
@@ -73,6 +100,82 @@ class StrategyLabRunMode(StrEnum):
 
     PAPER = "paper"
     BACKTEST = "backtest"
+
+
+class DashboardPaperOrderType(StrEnum):
+    """Paper-only advanced order ticket types."""
+
+    MARKET = "market"
+    LIMIT = "limit"
+    STOP = "stop"
+    OCO = "oco"
+
+
+class DashboardPaperOrderStatus(StrEnum):
+    """Lifecycle for local simulated order-ticket rows."""
+
+    OPEN = "open"
+    CANCELED = "canceled"
+
+
+class DashboardAlertType(StrEnum):
+    """Local dashboard alert types."""
+
+    PRICE_ABOVE = "price_above"
+    PRICE_BELOW = "price_below"
+    INDICATOR_CONFIDENCE = "indicator_confidence"
+    DRAWDOWN_ABOVE = "drawdown_above"
+    STALE_DATA = "stale_data"
+    PAPER_ORDER_EVENT = "paper_order_event"
+    RISK_HALT = "risk_halt"
+    RECOMMENDATION = "recommendation"
+
+
+class DashboardChartDrawingType(StrEnum):
+    """Local-only chart annotation types."""
+
+    HORIZONTAL_LEVEL = "horizontal_level"
+    TRENDLINE = "trendline"
+    BOX = "box"
+    NOTE = "note"
+    FIBONACCI = "fibonacci"
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardPaperOrderFilter:
+    """Binance-style paper order constraints for local ticket validation."""
+
+    symbol: str
+    tick_size: Decimal
+    step_size: Decimal
+    min_quantity: Decimal
+    min_notional: Decimal
+    price_precision: int
+    quantity_precision: int
+
+    def as_dict(self) -> dict[str, JsonValue]:
+        return {
+            "symbol": self.symbol,
+            "tick_size": str(self.tick_size),
+            "step_size": str(self.step_size),
+            "min_quantity": str(self.min_quantity),
+            "min_notional": str(self.min_notional),
+            "price_precision": self.price_precision,
+            "quantity_precision": self.quantity_precision,
+            "source": "paper_binance_style_filter",
+            "paper_only": True,
+        }
+
+
+PAPER_ORDER_FILTER = DashboardPaperOrderFilter(
+    symbol="BTC/USDT",
+    tick_size=Decimal("0.01"),
+    step_size=Decimal("0.0001"),
+    min_quantity=Decimal("0.0001"),
+    min_notional=Decimal("1"),
+    price_precision=2,
+    quantity_precision=4,
+)
 
 
 class PaperDashboardActionError(ValueError):
@@ -113,6 +216,192 @@ class DailyTrendConfirmation:
     source_ref: str
 
 
+@dataclass(frozen=True, slots=True)
+class DashboardWatchlistItem:
+    """Read-only market observation row for the Advanced Trader watchlist."""
+
+    symbol: str
+    price: Decimal | None
+    source: str
+    updated_at: datetime
+    data_health: str
+    paper_tradable: bool
+    note: str
+
+    def as_dict(self, *, selected_symbol: str) -> dict[str, JsonValue]:
+        return {
+            "symbol": self.symbol,
+            "price": _str(self.price),
+            "source": self.source,
+            "updated_at": self.updated_at.isoformat(),
+            "data_health": self.data_health,
+            "paper_tradable": self.paper_tradable,
+            "selected": self.symbol == selected_symbol,
+            "note": self.note,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardPaperOrder:
+    """One local simulated paper order created from Advanced Trader."""
+
+    order_id: str
+    order_type: DashboardPaperOrderType
+    side: OrderSide
+    quantity: Decimal
+    created_at: datetime
+    status: DashboardPaperOrderStatus = DashboardPaperOrderStatus.OPEN
+    symbol: str = "BTC/USDT"
+    limit_price: Decimal | None = None
+    stop_price: Decimal | None = None
+    take_profit_price: Decimal | None = None
+    reason: str = ""
+
+    def as_dict(self) -> dict[str, JsonValue]:
+        return {
+            "order_id": self.order_id,
+            "symbol": self.symbol,
+            "order_type": self.order_type.value,
+            "side": self.side.value,
+            "quantity": str(self.quantity),
+            "limit_price": _str(self.limit_price),
+            "stop_price": _str(self.stop_price),
+            "take_profit_price": _str(self.take_profit_price),
+            "status": self.status.value,
+            "created_at": self.created_at.isoformat(),
+            "reason": self.reason,
+            "paper_only": True,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardAlertRule:
+    """One local dashboard alert rule."""
+
+    alert_id: str
+    alert_type: DashboardAlertType
+    symbol: str
+    created_at: datetime
+    threshold: Decimal | None = None
+    expected_value: str = ""
+    enabled: bool = True
+
+    def as_dict(self) -> dict[str, JsonValue]:
+        return {
+            "alert_id": self.alert_id,
+            "alert_type": self.alert_type.value,
+            "symbol": self.symbol,
+            "threshold": _str(self.threshold),
+            "expected_value": self.expected_value,
+            "enabled": self.enabled,
+            "created_at": self.created_at.isoformat(),
+            "paper_only": True,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardJournalEntry:
+    """One local paper trade journal note for trader review."""
+
+    journal_id: str
+    symbol: str
+    setup_type: str
+    tags: tuple[str, ...]
+    notes: str
+    mistake_review: str
+    lesson: str
+    chart_context: str
+    created_at: datetime
+    updated_at: datetime
+    trade_ref: str = ""
+    strategy: str = "MinRiskSpotStrategyV1"
+    regime: str = "unknown"
+
+    def as_dict(self) -> dict[str, JsonValue]:
+        return {
+            "journal_id": self.journal_id,
+            "trade_ref": self.trade_ref,
+            "symbol": self.symbol,
+            "setup_type": self.setup_type,
+            "tags": list(self.tags),
+            "notes": self.notes,
+            "mistake_review": self.mistake_review,
+            "lesson": self.lesson,
+            "chart_context": self.chart_context,
+            "strategy": self.strategy,
+            "regime": self.regime,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+            "paper_only": True,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardTraderFeedback:
+    """One local paper-mode feedback item from a trader reviewer."""
+
+    feedback_id: str
+    reviewer_role: str
+    category: str
+    severity: str
+    summary: str
+    recommendation: str
+    status: str
+    created_at: datetime
+    resolution: str = ""
+    resolved_at: datetime | None = None
+
+    def as_dict(self) -> dict[str, JsonValue]:
+        return {
+            "feedback_id": self.feedback_id,
+            "reviewer_role": self.reviewer_role,
+            "category": self.category,
+            "severity": self.severity,
+            "summary": self.summary,
+            "recommendation": self.recommendation,
+            "status": self.status,
+            "resolution": self.resolution,
+            "created_at": self.created_at.isoformat(),
+            "resolved_at": self.resolved_at.isoformat() if self.resolved_at is not None else "",
+            "paper_only": True,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardChartDrawing:
+    """One local chart annotation saved for Advanced Trader review."""
+
+    drawing_id: str
+    drawing_type: DashboardChartDrawingType
+    symbol: str
+    timeframe: str
+    start_time: str
+    start_price: Decimal
+    created_at: datetime
+    end_time: str = ""
+    end_price: Decimal | None = None
+    text: str = ""
+    color: str = "#1264a3"
+    enabled: bool = True
+
+    def as_dict(self) -> dict[str, JsonValue]:
+        return {
+            "drawing_id": self.drawing_id,
+            "drawing_type": self.drawing_type.value,
+            "symbol": self.symbol,
+            "timeframe": self.timeframe,
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            "start_price": str(self.start_price),
+            "end_price": _str(self.end_price),
+            "text": self.text,
+            "color": self.color,
+            "enabled": self.enabled,
+            "created_at": self.created_at.isoformat(),
+            "paper_only": True,
+        }
+
+
 class MultiTimeframePaperStrategy:
     """Require 1d trend confirmation before accepting 1h BUY entries."""
 
@@ -147,12 +436,21 @@ class PaperDashboardController:
     state_path: str | None = None
     db_path: str | None = None
     market_data_source: str = "demo"
+    selected_watchlist_symbol: str = "BTC/USDT"
+    watchlist: tuple[DashboardWatchlistItem, ...] = ()
     ui_mode: DashboardUIMode = DashboardUIMode.ADVANCED_TRADER
     strategy_lab_strategy: str = "min_risk_spot_v1"
     strategy_lab_symbol: str = "BTC/USDT"
     strategy_lab_timeframe: str = "1h"
     strategy_lab_run_mode: StrategyLabRunMode = StrategyLabRunMode.PAPER
     strategy_lab_parameter_profile: str = "default"
+    order_book_snapshot: OrderBookSnapshot | None = None
+    recent_market_trades: tuple[Trade, ...] = ()
+    open_paper_orders: list[DashboardPaperOrder] = field(default_factory=list)
+    alert_rules: list[DashboardAlertRule] = field(default_factory=list)
+    journal_entries: list[DashboardJournalEntry] = field(default_factory=list)
+    trader_feedback: list[DashboardTraderFeedback] = field(default_factory=list)
+    chart_drawings: list[DashboardChartDrawing] = field(default_factory=list)
     events: list[PaperDashboardEvent] = field(default_factory=list)
 
     def state(self, *, ui_mode: DashboardUIMode | str | None = None) -> dict[str, JsonValue]:
@@ -162,6 +460,10 @@ class PaperDashboardController:
         status = self.api.status(READ_CONTEXT)
         latest = self.engine.cycles[-1] if self.engine.cycles else None
         suggested_trade = _suggested_trade(latest)
+        active_watchlist_item = _selected_watchlist_item(
+            self.watchlist,
+            self.selected_watchlist_symbol,
+        )
         can_approve = (
             latest is not None
             and latest.executed
@@ -193,13 +495,16 @@ class PaperDashboardController:
                 "transfers": False,
             },
             "market": {
-                "symbol": "BTC/USDT",
-                "source": self.market_data_source,
-                "current_price": _str(status.current_btc_price),
+                "symbol": active_watchlist_item.symbol,
+                "paper_strategy_symbol": "BTC/USDT",
+                "source": active_watchlist_item.source,
+                "current_price": _str(active_watchlist_item.price),
                 "spread": _str(_latest_spread(latest)),
-                "data_freshness": status.data_health,
+                "data_freshness": active_watchlist_item.data_health,
                 "market_regime": status.active_regime,
-                "updated_at": status.updated_at.isoformat(),
+                "updated_at": active_watchlist_item.updated_at.isoformat(),
+                "paper_tradable": active_watchlist_item.paper_tradable,
+                "symbol_note": active_watchlist_item.note,
             },
             "strategy": _strategy_state(status, latest),
             "suggested_paper_trade": suggested_trade,
@@ -227,6 +532,23 @@ class PaperDashboardController:
                 "emergency_label": "Emergency Stop",
                 "reset_emergency_label": "Reset Emergency Stop",
             },
+            "open_paper_orders": _open_paper_order_state(self.open_paper_orders),
+            "journal_entries": _journal_entry_state(self.journal_entries),
+            "chart_drawings": _chart_drawing_state(self.chart_drawings),
+            "watchlist": _watchlist_state(
+                self.watchlist,
+                selected_symbol=active_watchlist_item.symbol,
+            ),
+            "alert_rules": _alert_rule_state(self.alert_rules),
+            "trader_feedback": _trader_feedback_state(self.trader_feedback),
+            "alerts": _alert_state(
+                self.alert_rules,
+                market_item=active_watchlist_item,
+                status=status,
+                latest=latest,
+                events=self.events,
+                recommendation=str(_strategy_state(status, latest).get("recommendation", "HOLD")),
+            ),
             "logs": list(event.as_dict() for event in self.events),
             "transactions": _transaction_state(self.api.trades(READ_CONTEXT)),
             "daily_report": {
@@ -245,6 +567,8 @@ class PaperDashboardController:
             cycles=self.engine.cycles,
             latest=latest,
             can_approve=can_approve,
+            order_book=self.order_book_snapshot,
+            recent_market_trades=self.recent_market_trades,
             strategy_lab_selection={
                 "strategy": self.strategy_lab_strategy,
                 "symbol": self.strategy_lab_symbol,
@@ -299,6 +623,308 @@ class PaperDashboardController:
         _save_dashboard_preferences(self)
         return self.state()
 
+    def set_watchlist_symbol(self, symbol: str) -> dict[str, JsonValue]:
+        """Persist selected watchlist symbol without changing paper strategy authority."""
+
+        self.selected_watchlist_symbol = _watchlist_symbol(symbol)
+        _save_dashboard_preferences(self)
+        return self.state()
+
+    def add_alert_rule(
+        self,
+        *,
+        alert_type: str,
+        symbol: str,
+        threshold: str | None = None,
+        expected_value: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Create a local dashboard alert rule."""
+
+        active_type = _alert_type(alert_type)
+        active_symbol = _watchlist_symbol(symbol)
+        active_threshold = _alert_threshold(active_type, threshold)
+        rule = DashboardAlertRule(
+            alert_id=f"alert-{uuid4()}",
+            alert_type=active_type,
+            symbol=active_symbol,
+            threshold=active_threshold,
+            expected_value=_alert_expected_value(active_type, expected_value),
+            created_at=_latest_time(self.engine),
+        )
+        self.alert_rules.insert(0, rule)
+        self.events.insert(
+            0,
+            PaperDashboardEvent(
+                event_type="add_alert_rule",
+                message="Operator added a local dashboard alert rule.",
+                reason=f"{rule.alert_type.value} {rule.symbol}",
+                occurred_at=rule.created_at,
+            ),
+        )
+        _save_paper_account_state(self)
+        return self.state()
+
+    def delete_alert_rule(self, *, alert_id: str) -> dict[str, JsonValue]:
+        """Remove one local dashboard alert rule."""
+
+        cleaned_id = alert_id.strip()
+        before = len(self.alert_rules)
+        self.alert_rules = [rule for rule in self.alert_rules if rule.alert_id != cleaned_id]
+        if len(self.alert_rules) == before:
+            raise PaperDashboardActionError(f"unknown alert id: {cleaned_id}")
+        self.events.insert(
+            0,
+            PaperDashboardEvent(
+                event_type="delete_alert_rule",
+                message="Operator removed a local dashboard alert rule.",
+                reason=cleaned_id,
+                occurred_at=_latest_time(self.engine),
+            ),
+        )
+        _save_paper_account_state(self)
+        return self.state()
+
+    def save_journal_entry(
+        self,
+        *,
+        trade_ref: str | None = None,
+        symbol: str | None = None,
+        setup_type: str | None = None,
+        tags: str | None = None,
+        notes: str | None = None,
+        mistake_review: str | None = None,
+        lesson: str | None = None,
+        chart_context: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Save one local paper trade journal entry."""
+
+        active_symbol = _watchlist_symbol(symbol or self.selected_watchlist_symbol)
+        latest = self.engine.cycles[-1] if self.engine.cycles else None
+        strategy_name = (
+            latest.strategy_evaluation.strategy_name
+            if latest is not None and latest.strategy_evaluation is not None
+            else "MinRiskSpotStrategyV1"
+        )
+        regime = self.api.status(READ_CONTEXT).active_regime
+        now = _latest_time(self.engine)
+        entry = DashboardJournalEntry(
+            journal_id=f"journal-{uuid4()}",
+            trade_ref=(trade_ref or "").strip(),
+            symbol=active_symbol,
+            setup_type=_journal_setup_type(setup_type),
+            tags=_journal_tags(tags),
+            notes=_limited_text(notes, "notes", max_length=500),
+            mistake_review=_limited_text(mistake_review, "mistake review", max_length=500),
+            lesson=_limited_text(lesson, "lesson", max_length=500),
+            chart_context=_limited_text(chart_context, "chart context", max_length=300),
+            strategy=strategy_name,
+            regime=regime,
+            created_at=now,
+            updated_at=now,
+        )
+        self.journal_entries.insert(0, entry)
+        self.events.insert(
+            0,
+            PaperDashboardEvent(
+                event_type="save_journal_entry",
+                message="Operator saved a local paper trade journal entry.",
+                reason=f"{entry.symbol} {entry.setup_type}",
+                occurred_at=now,
+            ),
+        )
+        _save_paper_account_state(self)
+        return self.state()
+
+    def delete_journal_entry(self, *, journal_id: str) -> dict[str, JsonValue]:
+        """Remove one local paper trade journal entry."""
+
+        cleaned_id = journal_id.strip()
+        before = len(self.journal_entries)
+        self.journal_entries = [
+            entry for entry in self.journal_entries if entry.journal_id != cleaned_id
+        ]
+        if len(self.journal_entries) == before:
+            raise PaperDashboardActionError(f"unknown journal id: {cleaned_id}")
+        self.events.insert(
+            0,
+            PaperDashboardEvent(
+                event_type="delete_journal_entry",
+                message="Operator removed a local paper trade journal entry.",
+                reason=cleaned_id,
+                occurred_at=_latest_time(self.engine),
+            ),
+        )
+        _save_paper_account_state(self)
+        return self.state()
+
+    def save_trader_feedback(
+        self,
+        *,
+        reviewer_role: str | None = None,
+        category: str | None = None,
+        severity: str | None = None,
+        summary: str | None = None,
+        recommendation: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Save one local trader-review feedback item."""
+
+        now = _latest_time(self.engine)
+        feedback = DashboardTraderFeedback(
+            feedback_id=f"feedback-{uuid4()}",
+            reviewer_role=_trader_feedback_reviewer_role(reviewer_role),
+            category=_trader_feedback_category(category),
+            severity=_trader_feedback_severity(severity),
+            summary=_limited_text(summary, "feedback summary", max_length=400),
+            recommendation=_limited_text(
+                recommendation,
+                "feedback recommendation",
+                max_length=500,
+            ),
+            status="open",
+            created_at=now,
+        )
+        if not feedback.summary.strip():
+            raise PaperDashboardActionError("feedback summary is required")
+        self.trader_feedback.insert(0, feedback)
+        self.events.insert(
+            0,
+            PaperDashboardEvent(
+                event_type="save_trader_feedback",
+                message="Operator saved local trader review feedback.",
+                reason=f"{feedback.category} {feedback.severity}",
+                occurred_at=now,
+            ),
+        )
+        _save_paper_account_state(self)
+        return self.state()
+
+    def close_trader_feedback(
+        self,
+        *,
+        feedback_id: str,
+        resolution: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Mark one trader feedback item as closed in local paper state."""
+
+        cleaned_id = feedback_id.strip()
+        cleaned_resolution = _limited_text(
+            resolution,
+            "feedback resolution",
+            max_length=500,
+        )
+        now = _latest_time(self.engine)
+        updated: list[DashboardTraderFeedback] = []
+        found = False
+        for item in self.trader_feedback:
+            if item.feedback_id != cleaned_id:
+                updated.append(item)
+                continue
+            found = True
+            if item.severity == "blocker" and not cleaned_resolution:
+                raise PaperDashboardActionError(
+                    "blocker feedback requires a resolution note before closing"
+                )
+            updated.append(
+                DashboardTraderFeedback(
+                    feedback_id=item.feedback_id,
+                    reviewer_role=item.reviewer_role,
+                    category=item.category,
+                    severity=item.severity,
+                    summary=item.summary,
+                    recommendation=item.recommendation,
+                    status="closed",
+                    created_at=item.created_at,
+                    resolution=cleaned_resolution,
+                    resolved_at=now,
+                )
+            )
+        if not found:
+            raise PaperDashboardActionError(f"unknown trader feedback id: {cleaned_id}")
+        self.trader_feedback = updated
+        self.events.insert(
+            0,
+            PaperDashboardEvent(
+                event_type="close_trader_feedback",
+                message="Operator closed a local trader review feedback item.",
+                reason=cleaned_id,
+                occurred_at=now,
+            ),
+        )
+        _save_paper_account_state(self)
+        return self.state()
+
+    def save_chart_drawing(
+        self,
+        *,
+        drawing_type: str,
+        symbol: str | None = None,
+        timeframe: str | None = None,
+        start_time: str | None = None,
+        end_time: str | None = None,
+        start_price: str | None = None,
+        end_price: str | None = None,
+        text: str | None = None,
+        color: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Save one local-only chart annotation."""
+
+        active_type = _chart_drawing_type(drawing_type)
+        active_symbol = _watchlist_symbol(symbol or self.selected_watchlist_symbol)
+        active_timeframe = _chart_drawing_timeframe(timeframe)
+        latest = self.engine.cycles[-1] if self.engine.cycles else None
+        fallback_price = latest.snapshot.candle.close if latest is not None else Decimal("1")
+        drawing = DashboardChartDrawing(
+            drawing_id=f"drawing-{uuid4()}",
+            drawing_type=active_type,
+            symbol=active_symbol,
+            timeframe=active_timeframe,
+            start_time=_chart_drawing_time(start_time, latest=latest),
+            end_time=_chart_drawing_time(end_time, latest=latest),
+            start_price=_chart_drawing_price(start_price, fallback=fallback_price),
+            end_price=_chart_drawing_optional_price(
+                end_price,
+                fallback=fallback_price,
+                drawing_type=active_type,
+            ),
+            text=_limited_text(text, "drawing text", max_length=120),
+            color=_chart_drawing_color(color),
+            created_at=_latest_time(self.engine),
+        )
+        self.chart_drawings.insert(0, drawing)
+        self.events.insert(
+            0,
+            PaperDashboardEvent(
+                event_type="save_chart_drawing",
+                message="Operator saved a local chart drawing.",
+                reason=f"{drawing.symbol} {drawing.drawing_type.value}",
+                occurred_at=drawing.created_at,
+            ),
+        )
+        _save_paper_account_state(self)
+        return self.state()
+
+    def delete_chart_drawing(self, *, drawing_id: str) -> dict[str, JsonValue]:
+        """Remove one local chart drawing."""
+
+        cleaned_id = drawing_id.strip()
+        before = len(self.chart_drawings)
+        self.chart_drawings = [
+            drawing for drawing in self.chart_drawings if drawing.drawing_id != cleaned_id
+        ]
+        if len(self.chart_drawings) == before:
+            raise PaperDashboardActionError(f"unknown chart drawing id: {cleaned_id}")
+        self.events.insert(
+            0,
+            PaperDashboardEvent(
+                event_type="delete_chart_drawing",
+                message="Operator removed a local chart drawing.",
+                reason=cleaned_id,
+                occurred_at=_latest_time(self.engine),
+            ),
+        )
+        _save_paper_account_state(self)
+        return self.state()
+
     def approve_paper_trade(self, *, reason: str = "operator approved paper trade") -> None:
         """Approve and apply one simulated risk-approved paper trade only."""
 
@@ -337,6 +963,129 @@ class PaperDashboardController:
             ),
         )
         _save_paper_account_state(self)
+
+    def submit_paper_order_ticket(
+        self,
+        *,
+        order_type: str,
+        side: str,
+        quantity: str,
+        limit_price: str | None = None,
+        stop_price: str | None = None,
+        take_profit_price: str | None = None,
+        reason: str = "operator staged paper order ticket",
+    ) -> dict[str, JsonValue]:
+        """Create one local simulated order-ticket row without live execution."""
+
+        status = self.api.status(READ_CONTEXT)
+        if status.paused:
+            raise PaperDashboardActionError("paper bot is paused")
+        if status.kill_switch_active:
+            raise PaperDashboardActionError("paper kill switch is active")
+        reference_price = (
+            status.current_btc_price
+            or status.portfolio.average_entry_price
+            or WATCHLIST_DEMO_PRICES["BTC/USDT"]
+        )
+        active_order = _paper_order_from_ticket(
+            order_type=order_type,
+            side=side,
+            quantity=quantity,
+            limit_price=limit_price,
+            stop_price=stop_price,
+            take_profit_price=take_profit_price,
+            reference_price=reference_price,
+            created_at=_latest_time(self.engine),
+            reason=reason,
+        )
+        self.open_paper_orders.insert(0, active_order)
+        self.events.insert(
+            0,
+            PaperDashboardEvent(
+                event_type="submit_paper_order_ticket",
+                message="Operator staged a simulated paper order ticket only.",
+                reason=f"{active_order.order_type.value} {active_order.side.value} "
+                f"{active_order.quantity} BTC",
+                occurred_at=active_order.created_at,
+            ),
+        )
+        _save_paper_account_state(self)
+        return self.state()
+
+    def cancel_paper_order(
+        self,
+        *,
+        order_id: str,
+        reason: str = "operator canceled paper order",
+    ) -> dict[str, JsonValue]:
+        """Cancel one local simulated order-ticket row."""
+
+        cleaned_id = order_id.strip()
+        if not cleaned_id:
+            raise PaperDashboardActionError("paper order id is required")
+        for index, order in enumerate(self.open_paper_orders):
+            if order.order_id != cleaned_id:
+                continue
+            canceled = DashboardPaperOrder(
+                order_id=order.order_id,
+                order_type=order.order_type,
+                side=order.side,
+                quantity=order.quantity,
+                created_at=order.created_at,
+                status=DashboardPaperOrderStatus.CANCELED,
+                symbol=order.symbol,
+                limit_price=order.limit_price,
+                stop_price=order.stop_price,
+                take_profit_price=order.take_profit_price,
+                reason=reason,
+            )
+            self.open_paper_orders[index] = canceled
+            self.events.insert(
+                0,
+                PaperDashboardEvent(
+                    event_type="cancel_paper_order",
+                    message="Operator canceled a simulated paper order ticket.",
+                    reason=cleaned_id,
+                    occurred_at=_latest_time(self.engine),
+                ),
+            )
+            _save_paper_account_state(self)
+            return self.state()
+        raise PaperDashboardActionError(f"unknown paper order id: {cleaned_id}")
+
+    def stage_close_position(
+        self,
+        *,
+        reason: str = "operator staged close paper position",
+    ) -> dict[str, JsonValue]:
+        """Stage a paper-only market sell for the full open BTC position."""
+
+        quantity = self.engine.account.state.base_quantity
+        if quantity <= DECIMAL_ZERO:
+            raise PaperDashboardActionError("no open paper BTC position to close")
+        return self.submit_paper_order_ticket(
+            order_type=DashboardPaperOrderType.MARKET.value,
+            side=OrderSide.SELL.value,
+            quantity=str(quantity),
+            reason=reason,
+        )
+
+    def stage_reduce_position(
+        self,
+        *,
+        reason: str = "operator staged reduce paper position",
+    ) -> dict[str, JsonValue]:
+        """Stage a paper-only market sell for half of the open BTC position."""
+
+        quantity = self.engine.account.state.base_quantity
+        if quantity <= DECIMAL_ZERO:
+            raise PaperDashboardActionError("no open paper BTC position to reduce")
+        return self.submit_paper_order_ticket(
+            order_type=DashboardPaperOrderType.MARKET.value,
+            side=OrderSide.SELL.value,
+            quantity=str(quantity / Decimal("2")),
+            reason=reason,
+        )
 
     def pause(self, *, reason: str = "operator paused paper bot") -> None:
         self.api.pause(CONTROL_CONTEXT, reason=reason, updated_at=_latest_time(self.engine))
@@ -428,9 +1177,15 @@ def build_default_paper_dashboard_controller(
         else os.getenv("ABTP_MARKET_DATA_SOURCE", "demo")
     )
     requested_market_source = source_name.strip().lower()
-    snapshots, active_market_source, source_events, daily_confirmation = _dashboard_inputs(
-        requested_market_source,
-    )
+    (
+        snapshots,
+        active_market_source,
+        source_events,
+        daily_confirmation,
+        order_book,
+        recent_market_trades,
+        watchlist,
+    ) = _dashboard_inputs(requested_market_source)
     strategy: StrategyPlugin = MinRiskSpotStrategyV1()
     if daily_confirmation is not None:
         strategy = MultiTimeframePaperStrategy(strategy, daily_confirmation)
@@ -462,6 +1217,9 @@ def build_default_paper_dashboard_controller(
         state_path=state_path if state_path is not None else os.getenv("ABTP_PAPER_STATE_PATH"),
         db_path=db_path if db_path is not None else os.getenv("ABTP_PAPER_DB_PATH"),
         market_data_source=active_market_source,
+        order_book_snapshot=order_book,
+        recent_market_trades=recent_market_trades,
+        watchlist=watchlist,
         events=[*source_events, *_initial_events(engine)],
     )
     _restore_paper_account_state(controller)
@@ -550,10 +1308,15 @@ def _dashboard_inputs(
     str,
     tuple[PaperDashboardEvent, ...],
     DailyTrendConfirmation | None,
+    OrderBookSnapshot,
+    tuple[Trade, ...],
+    tuple[DashboardWatchlistItem, ...],
 ]:
     if requested_market_source == "binance":
         try:
-            snapshots, daily_confirmation = _binance_snapshots_and_daily_confirmation()
+            snapshots, daily_confirmation, order_book, recent_market_trades, watchlist = (
+                _binance_snapshots_and_daily_confirmation()
+            )
             return (
                 snapshots,
                 "binance spot",
@@ -566,10 +1329,15 @@ def _dashboard_inputs(
                     ),
                 ),
                 daily_confirmation,
+                order_book,
+                recent_market_trades,
+                watchlist,
             )
         except (ExchangeAdapterError, OSError, ValueError) as exc:
+            snapshots = _demo_snapshots()
+            order_book = _demo_order_book(snapshots[-1].candle.close)
             return (
-                _demo_snapshots(),
+                snapshots,
                 "demo fallback",
                 (
                     PaperDashboardEvent(
@@ -580,8 +1348,21 @@ def _dashboard_inputs(
                     ),
                 ),
                 None,
+                order_book,
+                _demo_market_trades(snapshots),
+                _demo_watchlist(),
             )
-    return _demo_snapshots(), "demo", (), None
+    snapshots = _demo_snapshots()
+    order_book = _demo_order_book(snapshots[-1].candle.close)
+    return (
+        snapshots,
+        "demo",
+        (),
+        None,
+        order_book,
+        _demo_market_trades(snapshots),
+        _demo_watchlist(),
+    )
 
 
 def _demo_snapshots() -> tuple[PaperMarketSnapshot, ...]:
@@ -590,15 +1371,87 @@ def _demo_snapshots() -> tuple[PaperMarketSnapshot, ...]:
     )
 
 
+def _demo_order_book(close: Decimal) -> OrderBookSnapshot:
+    return OrderBookSnapshot(
+        exchange=Exchange("sandbox"),
+        pair=PAIR,
+        captured_at=DEFAULT_NOW + timedelta(hours=4, seconds=1),
+        bids=tuple(
+            OrderBookLevel(
+                price=close - Decimal("0.01") - Decimal(index) * Decimal("0.02"),
+                quantity=Decimal("1.0") + Decimal(index) * Decimal("0.25"),
+            )
+            for index in range(5)
+        ),
+        asks=tuple(
+            OrderBookLevel(
+                price=close + Decimal("0.01") + Decimal(index) * Decimal("0.02"),
+                quantity=Decimal("0.9") + Decimal(index) * Decimal("0.30"),
+            )
+            for index in range(5)
+        ),
+        source_ref="demo:paper:order-book:BTC/USDT",
+    )
+
+
+def _demo_market_trades(snapshots: tuple[PaperMarketSnapshot, ...]) -> tuple[Trade, ...]:
+    trades: list[Trade] = []
+    for index, snapshot in enumerate(snapshots[-4:]):
+        candle = snapshot.candle
+        trades.append(
+            Trade(
+                exchange=Exchange("sandbox"),
+                pair=PAIR,
+                traded_at=candle.closed_at - timedelta(minutes=3),
+                price=candle.close - Decimal("0.03"),
+                quantity=Decimal("0.14") + Decimal(index) * Decimal("0.02"),
+                side=OrderSide.SELL if index % 2 else OrderSide.BUY,
+                trade_id=f"demo-trade-{index}-a",
+            )
+        )
+        trades.append(
+            Trade(
+                exchange=Exchange("sandbox"),
+                pair=PAIR,
+                traded_at=candle.closed_at - timedelta(minutes=1),
+                price=candle.close + Decimal("0.02"),
+                quantity=Decimal("0.18") + Decimal(index) * Decimal("0.03"),
+                side=OrderSide.BUY if index % 2 else OrderSide.SELL,
+                trade_id=f"demo-trade-{index}-b",
+            )
+        )
+    return tuple(trades)
+
+
+def _demo_watchlist() -> tuple[DashboardWatchlistItem, ...]:
+    return tuple(
+        DashboardWatchlistItem(
+            symbol=pair.symbol,
+            price=WATCHLIST_DEMO_PRICES[pair.symbol],
+            source="demo",
+            updated_at=DEFAULT_NOW + timedelta(hours=4, seconds=1),
+            data_health="healthy",
+            paper_tradable=pair.symbol == PAIR.symbol,
+            note=_watchlist_note(pair.symbol),
+        )
+        for pair in WATCHLIST_PAIRS
+    )
+
+
 def _binance_snapshots_and_daily_confirmation() -> tuple[
     tuple[PaperMarketSnapshot, ...],
     DailyTrendConfirmation,
+    OrderBookSnapshot,
+    tuple[Trade, ...],
+    tuple[DashboardWatchlistItem, ...],
 ]:
     adapter = BinanceSpotMarketDataAdapter()
     order_book = adapter.order_book(PAIR)
     metrics = calculate_order_book_metrics(order_book)
     hourly_candles = adapter.candles(PAIR, "1h", 4)
     daily_confirmation = _daily_confirmation_from_candles(adapter.candles(PAIR, "1d", 4))
+    recent_market_trades = _binance_recent_market_trades(adapter, hourly_candles)
+    watchlist = _binance_watchlist(adapter)
     snapshots = []
     for index, candle in enumerate(hourly_candles):
         snapshots.append(
@@ -611,7 +1464,62 @@ def _binance_snapshots_and_daily_confirmation() -> tuple[
                 order_book_metrics=metrics if index == len(hourly_candles) - 1 else None,
             )
         )
-    return tuple(snapshots), daily_confirmation
+    return tuple(snapshots), daily_confirmation, order_book, recent_market_trades, watchlist
+
+
+def _binance_recent_market_trades(
+    adapter: BinanceSpotMarketDataAdapter,
+    hourly_candles: tuple[Candle, ...],
+) -> tuple[Trade, ...]:
+    trade_end = hourly_candles[-1].closed_at
+    try:
+        return adapter.trades(PAIR, trade_end - timedelta(hours=1), trade_end)
+    except (AttributeError, ExchangeAdapterError, OSError, ValueError):
+        return _demo_market_trades(
+            tuple(
+                _snapshot(
+                    index,
+                    candle.close,
+                    exchange_name=candle.exchange.name,
+                    candle=candle,
+                    received_at=candle.closed_at + timedelta(milliseconds=1),
+                )
+                for index, candle in enumerate(hourly_candles)
+            )
+        )
+
+
+def _binance_watchlist(
+    adapter: BinanceSpotMarketDataAdapter,
+) -> tuple[DashboardWatchlistItem, ...]:
+    items: list[DashboardWatchlistItem] = []
+    for pair in WATCHLIST_PAIRS:
+        try:
+            ticker = adapter.ticker(pair)
+            items.append(
+                DashboardWatchlistItem(
+                    symbol=pair.symbol,
+                    price=ticker.price,
+                    source="binance spot",
+                    updated_at=ticker.captured_at,
+                    data_health="healthy",
+                    paper_tradable=pair.symbol == PAIR.symbol,
+                    note=_watchlist_note(pair.symbol),
+                )
+            )
+        except (AttributeError, ExchangeAdapterError, OSError, ValueError):
+            items.append(
+                DashboardWatchlistItem(
+                    symbol=pair.symbol,
+                    price=WATCHLIST_DEMO_PRICES[pair.symbol],
+                    source="demo fallback",
+                    updated_at=datetime.now(UTC),
+                    data_health="degraded",
+                    paper_tradable=pair.symbol == PAIR.symbol,
+                    note=f"{_watchlist_note(pair.symbol)} Binance ticker unavailable.",
+                )
+            )
+    return tuple(items)
 
 
 def _daily_confirmation_from_candles(candles: tuple[Candle, ...]) -> DailyTrendConfirmation:
@@ -854,6 +1762,7 @@ def _empty_trade(reason: str) -> dict[str, JsonValue]:
 def _transaction_state(trades: tuple[PaperTrade, ...]) -> list[JsonValue]:
     return [
         {
+            "trade_ref": str(trade.order_intent_id),
             "time": trade.occurred_at.isoformat(),
             "side": trade.side.value.upper(),
             "quantity": str(trade.quantity),
@@ -865,6 +1774,545 @@ def _transaction_state(trades: tuple[PaperTrade, ...]) -> list[JsonValue]:
     ]
 
 
+def _journal_entry_state(entries: list[DashboardJournalEntry]) -> list[JsonValue]:
+    return [entry.as_dict() for entry in entries]
+
+
+def _trader_feedback_state(items: list[DashboardTraderFeedback]) -> list[JsonValue]:
+    return [item.as_dict() for item in items]
+
+
+def _chart_drawing_state(drawings: list[DashboardChartDrawing]) -> list[JsonValue]:
+    return [drawing.as_dict() for drawing in drawings if drawing.enabled]
+
+
+def _open_paper_order_state(orders: list[DashboardPaperOrder]) -> list[JsonValue]:
+    return [order.as_dict() for order in orders if order.status is DashboardPaperOrderStatus.OPEN]
+
+
+def _watchlist_state(
+    items: tuple[DashboardWatchlistItem, ...],
+    *,
+    selected_symbol: str,
+) -> dict[str, JsonValue]:
+    active_items = items or _demo_watchlist()
+    return {
+        "selected_symbol": selected_symbol,
+        "paper_strategy_symbol": PAIR.symbol,
+        "symbols": [item.as_dict(selected_symbol=selected_symbol) for item in active_items],
+        "can_paper_trade_selected": selected_symbol == PAIR.symbol,
+        "live_order_capability": False,
+        "note": (
+            "BTC/USDT is paper-tradable now. Other watchlist symbols are read-only "
+            "until multi-symbol strategy and risk modules are added."
+        ),
+    }
+
+
+def _selected_watchlist_item(
+    items: tuple[DashboardWatchlistItem, ...],
+    selected_symbol: str,
+) -> DashboardWatchlistItem:
+    active_items = items or _demo_watchlist()
+    for item in active_items:
+        if item.symbol == selected_symbol:
+            return item
+    return active_items[0]
+
+
+def _watchlist_symbol(value: str) -> str:
+    symbol = value.strip().upper()
+    allowed = {pair.symbol for pair in WATCHLIST_PAIRS}
+    if symbol not in allowed:
+        raise PaperDashboardActionError(
+            f"unsupported watchlist symbol: {symbol}; expected {', '.join(sorted(allowed))}"
+        )
+    return symbol
+
+
+def _watchlist_note(symbol: str) -> str:
+    if symbol == PAIR.symbol:
+        return "Paper strategy, position, and staged paper orders are enabled for BTC/USDT."
+    return "Read-only watchlist symbol; paper strategy and order staging remain BTC/USDT-only."
+
+
+def _alert_rule_state(rules: list[DashboardAlertRule]) -> list[JsonValue]:
+    return [rule.as_dict() for rule in rules if rule.enabled]
+
+
+def _alert_state(
+    rules: list[DashboardAlertRule],
+    *,
+    market_item: DashboardWatchlistItem,
+    status: PaperStatusResponse,
+    latest: PaperTradingCycleResult | None,
+    events: list[PaperDashboardEvent],
+    recommendation: str,
+) -> dict[str, JsonValue]:
+    triggered: list[JsonValue] = []
+    risk_halts = _risk_halts(status)
+    for rule in rules:
+        if not rule.enabled:
+            continue
+        alert = _triggered_alert(
+            rule,
+            market_item=market_item,
+            risk_halts=risk_halts,
+            status=status,
+            latest=latest,
+            events=events,
+            recommendation=recommendation,
+        )
+        if alert is not None:
+            triggered.append(alert)
+    return {
+        "triggered": triggered,
+        "triggered_count": len(triggered),
+        "rules_count": len(_alert_rule_state(rules)),
+        "live_order_capability": False,
+        "notification_scope": "local_dashboard_only",
+        "supported_alert_types": [item.value for item in DashboardAlertType],
+    }
+
+
+def _triggered_alert(
+    rule: DashboardAlertRule,
+    *,
+    market_item: DashboardWatchlistItem,
+    risk_halts: tuple[str, ...],
+    status: PaperStatusResponse,
+    latest: PaperTradingCycleResult | None,
+    events: list[PaperDashboardEvent],
+    recommendation: str,
+) -> dict[str, JsonValue] | None:
+    if rule.alert_type in {DashboardAlertType.PRICE_ABOVE, DashboardAlertType.PRICE_BELOW}:
+        if rule.symbol != market_item.symbol or rule.threshold is None or market_item.price is None:
+            return None
+        if (
+            rule.alert_type is DashboardAlertType.PRICE_ABOVE
+            and market_item.price <= rule.threshold
+        ):
+            return None
+        if (
+            rule.alert_type is DashboardAlertType.PRICE_BELOW
+            and market_item.price >= rule.threshold
+        ):
+            return None
+        return _alert_payload(
+            rule,
+            message=f"{rule.symbol} price {market_item.price} crossed {rule.threshold}",
+        )
+    if rule.alert_type is DashboardAlertType.RISK_HALT:
+        active_halts = tuple(item for item in risk_halts if item != "none")
+        if not active_halts:
+            return None
+        return _alert_payload(rule, message="; ".join(active_halts))
+    if rule.alert_type is DashboardAlertType.INDICATOR_CONFIDENCE:
+        threshold = rule.threshold or Decimal("0.60")
+        confidence = _latest_signal_confidence(latest)
+        if confidence < threshold:
+            return None
+        return _alert_payload(
+            rule,
+            message=f"signal confidence {confidence} reached {threshold}",
+        )
+    if rule.alert_type is DashboardAlertType.DRAWDOWN_ABOVE:
+        threshold = rule.threshold or Decimal("0")
+        drawdown = status.portfolio.drawdown_pct
+        if drawdown < threshold:
+            return None
+        return _alert_payload(rule, message=f"drawdown {drawdown} reached {threshold}")
+    if rule.alert_type is DashboardAlertType.STALE_DATA:
+        stale_reasons = _stale_data_alert_reasons(market_item=market_item, latest=latest)
+        if not stale_reasons:
+            return None
+        return _alert_payload(rule, message="; ".join(stale_reasons))
+    if rule.alert_type is DashboardAlertType.PAPER_ORDER_EVENT:
+        event = _latest_paper_order_event(events, expected=rule.expected_value)
+        if event is None:
+            return None
+        return _alert_payload(rule, message=f"{event.event_type}: {event.reason}")
+    if rule.alert_type is DashboardAlertType.RECOMMENDATION:
+        expected = rule.expected_value or "BUY"
+        if recommendation.upper() != expected:
+            return None
+        return _alert_payload(rule, message=f"recommendation is {recommendation.upper()}")
+    return None
+
+
+def _alert_payload(rule: DashboardAlertRule, *, message: str) -> dict[str, JsonValue]:
+    return {
+        "alert_id": rule.alert_id,
+        "alert_type": rule.alert_type.value,
+        "symbol": rule.symbol,
+        "message": message,
+        "paper_only": True,
+    }
+
+
+def _latest_signal_confidence(latest: PaperTradingCycleResult | None) -> Decimal:
+    if latest is None or latest.strategy_evaluation is None:
+        return DECIMAL_ZERO
+    return latest.strategy_evaluation.signal.confidence
+
+
+def _stale_data_alert_reasons(
+    *,
+    market_item: DashboardWatchlistItem,
+    latest: PaperTradingCycleResult | None,
+) -> list[str]:
+    reasons: list[str] = []
+    if market_item.data_health != "healthy":
+        reasons.append(f"market data health is {market_item.data_health}")
+    if latest is not None and latest.skipped_reason and "stale" in latest.skipped_reason.lower():
+        reasons.append(latest.skipped_reason)
+    if latest is not None and latest.snapshot.health.is_stale:
+        reasons.append("latest market stream is stale")
+    return reasons
+
+
+def _latest_paper_order_event(
+    events: list[PaperDashboardEvent],
+    *,
+    expected: str,
+) -> PaperDashboardEvent | None:
+    allowed = {
+        "submit_paper_order_ticket",
+        "cancel_paper_order",
+    }
+    normalized_expected = expected.strip()
+    for event in events:
+        if event.event_type not in allowed:
+            continue
+        if normalized_expected and event.event_type != normalized_expected:
+            continue
+        return event
+    return None
+
+
+def _alert_type(value: str) -> DashboardAlertType:
+    try:
+        return DashboardAlertType(value.strip().lower())
+    except ValueError as exc:
+        allowed = ", ".join(item.value for item in DashboardAlertType)
+        message = f"unsupported alert type: {value}; expected {allowed}"
+        raise PaperDashboardActionError(message) from exc
+
+
+def _alert_threshold(alert_type: DashboardAlertType, value: str | None) -> Decimal | None:
+    if alert_type not in {
+        DashboardAlertType.PRICE_ABOVE,
+        DashboardAlertType.PRICE_BELOW,
+        DashboardAlertType.INDICATOR_CONFIDENCE,
+        DashboardAlertType.DRAWDOWN_ABOVE,
+    }:
+        return None
+    if value is None or not value.strip():
+        raise PaperDashboardActionError(f"{alert_type.value} alert requires threshold")
+    if alert_type in {DashboardAlertType.PRICE_ABOVE, DashboardAlertType.PRICE_BELOW}:
+        return _required_positive_decimal(value, "alert threshold")
+    return _required_non_negative_decimal(value, "alert threshold")
+
+
+def _alert_expected_value(alert_type: DashboardAlertType, value: str | None) -> str:
+    cleaned = (value or "").strip()
+    if alert_type is DashboardAlertType.RECOMMENDATION:
+        return cleaned.upper()
+    return cleaned
+
+
+def _journal_setup_type(value: str | None) -> str:
+    setup_type = (value or "manual_review").strip().lower()
+    allowed = {
+        "trend_continuation",
+        "pullback",
+        "breakout",
+        "mean_reversion",
+        "risk_reduction",
+        "manual_review",
+    }
+    if setup_type not in allowed:
+        raise PaperDashboardActionError(
+            f"unsupported journal setup type: {setup_type}; expected {', '.join(sorted(allowed))}"
+        )
+    return setup_type
+
+
+def _journal_tags(value: str | None) -> tuple[str, ...]:
+    raw_tags = (value or "").replace(";", ",").split(",")
+    tags: list[str] = []
+    for raw_tag in raw_tags:
+        tag = raw_tag.strip().lower().replace(" ", "_")
+        if not tag or tag in tags:
+            continue
+        if len(tag) > 32:
+            raise PaperDashboardActionError("journal tag is too long")
+        tags.append(tag)
+    return tuple(tags[:8])
+
+
+def _trader_feedback_reviewer_role(value: str | None) -> str:
+    role = (value or "trader").strip().lower().replace(" ", "_")
+    allowed = {"trader", "risk_reviewer", "strategy_reviewer", "operator", "developer"}
+    if role not in allowed:
+        raise PaperDashboardActionError(
+            f"unsupported feedback reviewer role: {role}; expected {', '.join(sorted(allowed))}"
+        )
+    return role
+
+
+def _trader_feedback_category(value: str | None) -> str:
+    category = (value or "ui").strip().lower().replace(" ", "_")
+    allowed = {
+        "ui",
+        "risk",
+        "strategy",
+        "market_data",
+        "order_ticket",
+        "reporting",
+        "missing_feature",
+    }
+    if category not in allowed:
+        raise PaperDashboardActionError(
+            f"unsupported feedback category: {category}; expected {', '.join(sorted(allowed))}"
+        )
+    return category
+
+
+def _trader_feedback_severity(value: str | None) -> str:
+    severity = (value or "medium").strip().lower()
+    allowed = {"low", "medium", "high", "blocker"}
+    if severity not in allowed:
+        raise PaperDashboardActionError(
+            f"unsupported feedback severity: {severity}; expected {', '.join(sorted(allowed))}"
+        )
+    return severity
+
+
+def _limited_text(value: str | None, label: str, *, max_length: int) -> str:
+    cleaned = (value or "").strip()
+    if len(cleaned) > max_length:
+        raise PaperDashboardActionError(f"journal {label} is too long")
+    return cleaned
+
+
+def _journal_tag_counts(entries: list[Mapping[str, JsonValue]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for entry in entries:
+        tags = entry.get("tags", [])
+        if not isinstance(tags, list):
+            continue
+        for tag in tags:
+            tag_text = str(tag)
+            counts[tag_text] = counts.get(tag_text, 0) + 1
+    return counts
+
+
+def _journal_chart_context_hint(latest: PaperTradingCycleResult | None) -> str:
+    if latest is None:
+        return "No latest chart candle is available."
+    candle = latest.snapshot.candle
+    return (
+        f"{PAIR.symbol} {candle.opened_at.isoformat()} "
+        f"O:{candle.open} H:{candle.high} L:{candle.low} C:{candle.close}"
+    )
+
+
+def _chart_drawing_type(value: str) -> DashboardChartDrawingType:
+    try:
+        return DashboardChartDrawingType(value.strip().lower())
+    except ValueError as exc:
+        allowed = ", ".join(item.value for item in DashboardChartDrawingType)
+        raise PaperDashboardActionError(
+            f"unsupported chart drawing type: {value}; expected {allowed}"
+        ) from exc
+
+
+def _chart_drawing_timeframe(value: str | None) -> str:
+    timeframe = (value or "1h").strip().lower()
+    if timeframe not in {"1h", "4h", "1d"}:
+        raise PaperDashboardActionError("unsupported chart drawing timeframe")
+    return timeframe
+
+
+def _chart_drawing_time(
+    value: str | None,
+    *,
+    latest: PaperTradingCycleResult | None,
+) -> str:
+    cleaned = (value or "").strip()
+    if cleaned:
+        return cleaned
+    if latest is None:
+        return DEFAULT_NOW.isoformat()
+    return latest.snapshot.candle.closed_at.isoformat()
+
+
+def _chart_drawing_price(value: str | None, *, fallback: Decimal) -> Decimal:
+    if value is None or not value.strip():
+        return fallback
+    return _required_positive_decimal(value, "chart drawing price")
+
+
+def _chart_drawing_optional_price(
+    value: str | None,
+    *,
+    fallback: Decimal,
+    drawing_type: DashboardChartDrawingType,
+) -> Decimal | None:
+    needs_second_price = {
+        DashboardChartDrawingType.TRENDLINE,
+        DashboardChartDrawingType.BOX,
+        DashboardChartDrawingType.FIBONACCI,
+    }
+    if drawing_type in needs_second_price:
+        return _chart_drawing_price(value, fallback=fallback)
+    return _optional_positive_decimal(value, "chart drawing end price")
+
+
+def _chart_drawing_color(value: str | None) -> str:
+    cleaned = (value or "#1264a3").strip()
+    allowed = {"#1264a3", "#0f7b52", "#b42318", "#9a6700", "#6941c6", "#172026"}
+    if cleaned not in allowed:
+        raise PaperDashboardActionError("unsupported chart drawing color")
+    return cleaned
+
+
+def _paper_order_from_ticket(
+    *,
+    order_type: str,
+    side: str,
+    quantity: str,
+    limit_price: str | None,
+    stop_price: str | None,
+    take_profit_price: str | None,
+    reference_price: Decimal,
+    created_at: datetime,
+    reason: str,
+) -> DashboardPaperOrder:
+    try:
+        active_type = DashboardPaperOrderType(order_type.strip().lower())
+        active_side = OrderSide(side.strip().lower())
+    except ValueError as exc:
+        raise PaperDashboardActionError("unsupported paper order ticket value") from exc
+    active_quantity = _required_positive_decimal(quantity, "quantity")
+    active_limit = _optional_positive_decimal(limit_price, "limit price")
+    active_stop = _optional_positive_decimal(stop_price, "stop price")
+    active_take_profit = _optional_positive_decimal(take_profit_price, "take profit price")
+    if active_type is DashboardPaperOrderType.LIMIT and active_limit is None:
+        raise PaperDashboardActionError("limit paper order requires limit price")
+    if active_type is DashboardPaperOrderType.STOP and active_stop is None:
+        raise PaperDashboardActionError("stop paper order requires stop price")
+    if active_type is DashboardPaperOrderType.OCO and (
+        active_stop is None or active_take_profit is None
+    ):
+        raise PaperDashboardActionError("OCO paper order requires stop and take profit prices")
+    _validate_paper_order_filter(
+        order_type=active_type,
+        quantity=active_quantity,
+        reference_price=reference_price,
+        limit_price=active_limit,
+        stop_price=active_stop,
+        take_profit_price=active_take_profit,
+    )
+    if active_type is DashboardPaperOrderType.MARKET:
+        active_limit = None
+        active_stop = None
+        active_take_profit = None
+    return DashboardPaperOrder(
+        order_id=f"paper-{uuid4()}",
+        order_type=active_type,
+        side=active_side,
+        quantity=active_quantity,
+        created_at=created_at,
+        limit_price=active_limit,
+        stop_price=active_stop,
+        take_profit_price=active_take_profit,
+        reason=reason,
+    )
+
+
+def _validate_paper_order_filter(
+    *,
+    order_type: DashboardPaperOrderType,
+    quantity: Decimal,
+    reference_price: Decimal,
+    limit_price: Decimal | None,
+    stop_price: Decimal | None,
+    take_profit_price: Decimal | None,
+) -> None:
+    """Apply Binance-style symbol filters to the local paper ticket."""
+
+    if quantity < PAPER_ORDER_FILTER.min_quantity:
+        raise PaperDashboardActionError(
+            f"paper order quantity is below min_quantity {PAPER_ORDER_FILTER.min_quantity}"
+        )
+    _require_increment(
+        quantity,
+        PAPER_ORDER_FILTER.step_size,
+        label="quantity",
+        filter_name="step_size",
+    )
+    for label, price in (
+        ("limit price", limit_price),
+        ("stop price", stop_price),
+        ("take profit price", take_profit_price),
+    ):
+        if price is None:
+            continue
+        _require_increment(
+            price,
+            PAPER_ORDER_FILTER.tick_size,
+            label=label,
+            filter_name="tick_size",
+        )
+    estimated_price = _paper_order_filter_price(
+        order_type=order_type,
+        reference_price=reference_price,
+        limit_price=limit_price,
+        stop_price=stop_price,
+        take_profit_price=take_profit_price,
+    )
+    notional = quantity * estimated_price
+    if notional < PAPER_ORDER_FILTER.min_notional:
+        raise PaperDashboardActionError(
+            f"paper order notional {notional} is below min_notional "
+            f"{PAPER_ORDER_FILTER.min_notional}"
+        )
+
+
+def _paper_order_filter_price(
+    *,
+    order_type: DashboardPaperOrderType,
+    reference_price: Decimal,
+    limit_price: Decimal | None,
+    stop_price: Decimal | None,
+    take_profit_price: Decimal | None,
+) -> Decimal:
+    if order_type is DashboardPaperOrderType.LIMIT and limit_price is not None:
+        return limit_price
+    if order_type is DashboardPaperOrderType.STOP and stop_price is not None:
+        return stop_price
+    if order_type is DashboardPaperOrderType.OCO:
+        oco_prices = [price for price in (stop_price, take_profit_price) if price is not None]
+        if oco_prices:
+            return min(oco_prices)
+    return reference_price
+
+
+def _require_increment(
+    value: Decimal,
+    increment: Decimal,
+    *,
+    label: str,
+    filter_name: str,
+) -> None:
+    if value % increment != DECIMAL_ZERO:
+        raise PaperDashboardActionError(
+            f"paper order {label} does not align to {filter_name} {increment}"
+        )
+
+
 def _adaptive_view_sections(
     *,
     payload: Mapping[str, JsonValue],
@@ -872,6 +2320,8 @@ def _adaptive_view_sections(
     cycles: tuple[PaperTradingCycleResult, ...],
     latest: PaperTradingCycleResult | None,
     can_approve: bool,
+    order_book: OrderBookSnapshot | None,
+    recent_market_trades: tuple[Trade, ...],
     strategy_lab_selection: Mapping[str, JsonValue],
 ) -> dict[str, JsonValue]:
     strategy = _as_mapping(payload["strategy"])
@@ -879,8 +2329,15 @@ def _adaptive_view_sections(
     controls = _as_mapping(payload["controls"])
     market = _as_mapping(payload["market"])
     trade = _as_mapping(payload["suggested_paper_trade"])
+    open_orders = _as_list(payload["open_paper_orders"])
     transactions = _as_list(payload["transactions"])
+    journal_entries = _as_list(payload["journal_entries"])
+    trader_feedback = _as_list(payload["trader_feedback"])
+    chart_drawings = _as_list(payload["chart_drawings"])
     logs = _as_list(payload["logs"])
+    watchlist = _as_mapping(payload["watchlist"])
+    alerts = _as_mapping(payload["alerts"])
+    alert_rules = _as_list(payload["alert_rules"])
     reasons = _as_text_list(strategy.get("indicator_reasons", []))
     actionable = can_approve and str(trade.get("status", "")) == "risk_approved_simulated_fill"
     recommendation = str(strategy.get("recommendation", "HOLD"))
@@ -890,6 +2347,7 @@ def _adaptive_view_sections(
     trade_payload = dict(trade)
     portfolio_payload = dict(portfolio)
     controls_payload = dict(controls)
+    watchlist_payload = dict(watchlist)
     return {
         DashboardUIMode.BEGINNER.value: {
             "enabled_modules": [
@@ -921,22 +2379,67 @@ def _adaptive_view_sections(
                 "paper_trading_engine",
                 "risk_engine",
                 "portfolio_manager",
+                "risk_safety_panel",
+                "exchange_health",
                 "market_data_adapter_read_only",
                 "indicators_feature_pipeline",
+                "local_chart_drawings",
                 "backtest_summary",
                 "performance_analytics",
                 "position_exit_review",
                 "paper_ledger",
                 "audit_evidence",
+                "order_book_depth",
+                "order_flow_recent_trades",
+                "watchlist_manager",
+                "local_alerts",
+                "trade_journal_analytics",
+                "paper_order_ticket",
+                "open_paper_orders",
             ],
             "market": market_payload,
             "strategy": strategy_payload,
             "suggested_paper_trade": trade_payload,
             "portfolio": portfolio_payload,
             "controls": controls_payload,
+            "risk_safety": _advanced_risk_safety_payload(
+                status=status,
+                latest=latest,
+                market=market,
+                portfolio=portfolio,
+                controls=controls,
+                order_book=order_book,
+                recent_market_trades=recent_market_trades,
+                transactions=transactions,
+                open_orders=open_orders,
+                events=logs,
+            ),
             "transactions": transactions,
+            "chart_drawings": chart_drawings,
+            "watchlist": watchlist_payload,
+            "alerts": dict(alerts),
+            "alert_rules": alert_rules,
+            "open_paper_orders": open_orders,
+            "order_ticket": _advanced_order_ticket_payload(latest=latest),
+            "trade_journal": _advanced_trade_journal_payload(
+                transactions=transactions,
+                journal_entries=journal_entries,
+                status=status,
+                latest=latest,
+            ),
+            "trader_feedback": _advanced_trader_feedback_payload(trader_feedback),
             "logs": logs,
-            "chart": _advanced_chart_payload(cycles),
+            "chart": _advanced_chart_payload(cycles, drawings=chart_drawings),
+            "order_book": _advanced_order_book_payload(
+                latest=latest,
+                order_book=order_book,
+            ),
+            "order_flow": _advanced_order_flow_payload(
+                trades=recent_market_trades,
+                order_book=order_book,
+                latest=latest,
+            ),
+            "position": _advanced_position_payload(status=status, latest=latest),
             "backtest_summary": _advanced_backtest_summary(status=status, latest=latest),
             "performance": _advanced_performance_summary(status=status),
             "exit_review": _advanced_exit_review(
@@ -946,13 +2449,22 @@ def _adaptive_view_sections(
             ),
             "exports": {
                 "transactions_csv": "/paper-transactions.csv",
+                "trader_feedback_csv": "/trader-feedback.csv",
                 "paper_report": "/paper-report",
+                "trader_handoff": "/trader-handoff.md",
+                "trader_evidence_json": "/trader-evidence.json",
             },
         },
         DashboardUIMode.STRATEGY_LAB.value: _strategy_lab_view(
             selection=strategy_lab_selection,
             default_symbol=str(market.get("symbol", "BTC/USDT")),
             strategy=strategy_payload,
+            status=status,
+            latest=latest,
+            market=market,
+            order_book=order_book,
+            recent_market_trades=recent_market_trades,
+            transactions=transactions,
             actionable=actionable,
             evidence_status=evidence_status,
         ),
@@ -964,6 +2476,12 @@ def _strategy_lab_view(
     selection: Mapping[str, JsonValue],
     default_symbol: str,
     strategy: Mapping[str, JsonValue],
+    status: PaperStatusResponse,
+    latest: PaperTradingCycleResult | None,
+    market: Mapping[str, JsonValue],
+    order_book: OrderBookSnapshot | None,
+    recent_market_trades: tuple[Trade, ...],
+    transactions: list[JsonValue],
     actionable: bool,
     evidence_status: str,
 ) -> dict[str, JsonValue]:
@@ -974,6 +2492,21 @@ def _strategy_lab_view(
     run_mode = str(selection.get("run_mode", StrategyLabRunMode.PAPER.value))
     parameter_profile = str(selection.get("parameter_profile", "default"))
     missing_evidence = _strategy_lab_missing_evidence(profile, strategy)
+    evidence_matrix = _strategy_lab_evidence_matrix(
+        profile=profile,
+        strategy=strategy,
+        status=status,
+        latest=latest,
+        market=market,
+        order_book=order_book,
+        recent_market_trades=recent_market_trades,
+        transactions=transactions,
+    )
+    missing_routing_evidence: list[JsonValue] = []
+    for row in evidence_matrix:
+        evidence_row = _as_mapping(row)
+        if evidence_row.get("required") is True and str(evidence_row.get("status")) != "available":
+            missing_routing_evidence.append(str(evidence_row.get("evidence")))
     is_selected_supported = (
         symbol in _as_text_tuple(profile["symbols"])
         and timeframe in _as_text_tuple(profile["timeframes"])
@@ -983,19 +2516,39 @@ def _strategy_lab_view(
         actionable
         and evidence_status == "available"
         and not missing_evidence
+        and not missing_routing_evidence
         and profile["paper_approval_allowed"] is True
         and run_mode == StrategyLabRunMode.PAPER.value
         and is_selected_supported
     )
+    parameter_config = _strategy_lab_parameter_config(profile, parameter_profile)
     return {
         "enabled_modules": list(_as_text_tuple(profile["enabled_modules"])),
         "selected_strategy": profile["label"],
+        "strategy_family": profile["family"],
+        "strategy_status": profile["status"],
+        "description": profile["description"],
         "selection": {
             "strategy": profile["key"],
             "symbol": symbol,
             "timeframe": timeframe,
             "run_mode": run_mode,
             "parameter_profile": parameter_profile,
+        },
+        "evidence_request": {
+            "ui_profile": DashboardUIMode.STRATEGY_LAB.value,
+            "strategy_profile": profile["key"],
+            "run_mode": run_mode,
+            "parameter_profile": parameter_profile,
+            "requested_modules": list(_as_text_tuple(profile["enabled_modules"])),
+            "requested_evidence": list(_as_text_tuple(profile["required_evidence"])),
+            "live_execution_requested": False,
+        },
+        "routing_decision": {
+            "scope": "paper_evidence_only",
+            "live_execution_enabled": False,
+            "selected_symbol_supported": is_selected_supported,
+            "paper_approval_allowed": profile["paper_approval_allowed"],
         },
         "selectors": {
             "strategies": _strategy_selector_options(),
@@ -1005,18 +2558,33 @@ def _strategy_lab_view(
             "parameter_profiles": list(_as_text_tuple(profile["parameter_profiles"])),
         },
         "paper_approval_allowed": profile["paper_approval_allowed"],
-        "evidence_status": "missing" if missing_evidence else evidence_status,
+        "evidence_status": "missing"
+        if missing_evidence or missing_routing_evidence
+        else evidence_status,
         "recommendation_actionable": recommendation_actionable,
         "required_evidence": list(_as_text_tuple(profile["required_evidence"])),
-        "missing_evidence": missing_evidence,
+        "missing_evidence": missing_evidence + missing_routing_evidence,
+        "evidence_matrix": evidence_matrix,
+        "module_routing": _strategy_lab_module_routing(
+            profile=profile,
+            strategy=strategy,
+            evidence_matrix=evidence_matrix,
+        ),
+        "parameter_config": parameter_config,
         "required_market_data": list(_as_text_tuple(profile["required_market_data"])),
         "required_indicators": list(_as_text_tuple(profile["required_indicators"])),
+        "required_ai_context_modules": list(_as_text_tuple(profile["required_ai_context_modules"])),
         "required_risk_checks": list(_as_text_tuple(profile["required_risk_checks"])),
         "required_explanation_fields": list(_as_text_tuple(profile["required_explanation_fields"])),
         "chart_overlays": list(_as_text_tuple(profile["chart_overlays"])),
         "backtest_metrics": list(_as_text_tuple(profile["backtest_metrics"])),
         "strategy_state": dict(strategy),
-        "compare_runs": _strategy_lab_compare_runs(profile),
+        "compare_runs": _strategy_lab_compare_runs(
+            profile=profile,
+            status=status,
+            latest=latest,
+            selected_parameter_profile=parameter_profile,
+        ),
         "limitations": _strategy_lab_limitations(run_mode, recommendation_actionable),
     }
 
@@ -1059,9 +2627,17 @@ def _strategy_profiles() -> dict[str, dict[str, JsonValue]]:
                 "risk_decision",
                 "explanation_fields",
                 "paper_account_state",
+                "order_book_depth",
+                "recent_public_trades",
+                "backtest_metrics",
             ],
             "required_market_data": ["BTC/USDT candles", "order book spread", "stream health"],
             "required_indicators": ["return_3", "RSI", "ATR percent", "volume ratio", "spread bps"],
+            "required_ai_context_modules": [
+                "confidence_engine",
+                "strategy_explanation",
+                "paper_evaluation_gate",
+            ],
             "required_risk_checks": [
                 "stop loss required",
                 "max spread",
@@ -1088,6 +2664,20 @@ def _strategy_profiles() -> dict[str, dict[str, JsonValue]]:
                 "slippage",
                 "sample_size",
             ],
+            "parameter_profile_configs": {
+                "default": {
+                    "risk_per_trade_pct": "0.25",
+                    "minimum_reward_to_risk": "2.0",
+                    "daily_trend_confirmation": "enabled",
+                    "entry_style": "conservative pullback or confirmed momentum",
+                },
+                "defensive": {
+                    "risk_per_trade_pct": "0.10",
+                    "minimum_reward_to_risk": "2.5",
+                    "daily_trend_confirmation": "required",
+                    "entry_style": "capital-preservation only",
+                },
+            },
         }
     }
 
@@ -1116,7 +2706,163 @@ def _strategy_lab_missing_evidence(
     return missing
 
 
-def _strategy_lab_compare_runs(profile: Mapping[str, JsonValue]) -> list[JsonValue]:
+def _strategy_lab_evidence_matrix(
+    *,
+    profile: Mapping[str, JsonValue],
+    strategy: Mapping[str, JsonValue],
+    status: PaperStatusResponse,
+    latest: PaperTradingCycleResult | None,
+    market: Mapping[str, JsonValue],
+    order_book: OrderBookSnapshot | None,
+    recent_market_trades: tuple[Trade, ...],
+    transactions: list[JsonValue],
+) -> list[JsonValue]:
+    explanation_missing = _strategy_lab_missing_evidence(profile, strategy)
+    backtest_summary = _advanced_backtest_summary(status=status, latest=latest)
+    checks: dict[str, tuple[bool, str, str]] = {
+        "market_data": (
+            latest is not None and str(market.get("current_price")) != "not_available",
+            f"source={market.get('source', 'not_available')}, symbol={market.get('symbol')}",
+            "market_data_adapter_read_only",
+        ),
+        "indicator_features": (
+            str(strategy.get("data_quality", "")) not in {"", "unavailable", "not_available"},
+            f"data_quality={strategy.get('data_quality', 'not_available')}",
+            "indicators_feature_pipeline",
+        ),
+        "risk_decision": (
+            str(strategy.get("risk_decision", "")) not in {"", "not_evaluated", "not_available"},
+            f"risk_decision={strategy.get('risk_decision', 'not_available')}",
+            "risk_engine",
+        ),
+        "explanation_fields": (
+            not explanation_missing,
+            "all required explanation fields present"
+            if not explanation_missing
+            else ", ".join(str(item) for item in explanation_missing),
+            "strategy_explanation",
+        ),
+        "paper_account_state": (
+            status.portfolio.equity >= DECIMAL_ZERO,
+            f"equity={status.portfolio.equity}, trades={status.trades_count}",
+            "paper_trading_engine",
+        ),
+        "order_book_depth": (
+            order_book is not None,
+            order_book.source_ref if order_book is not None else "not_available",
+            "order_book_depth",
+        ),
+        "recent_public_trades": (
+            bool(recent_market_trades),
+            f"recent_trades={len(recent_market_trades)}",
+            "order_flow_recent_trades",
+        ),
+        "backtest_metrics": (
+            str(backtest_summary.get("sample_size", "0")) != "0",
+            f"sample_size={backtest_summary.get('sample_size', '0')}",
+            "backtest_summary",
+        ),
+        "paper_transactions": (
+            bool(transactions),
+            f"transactions={len(transactions)}",
+            "paper_ledger",
+        ),
+    }
+    required = set(_as_text_tuple(profile["required_evidence"]))
+    rows: list[JsonValue] = []
+    for evidence_name in _as_text_tuple(profile["required_evidence"]):
+        available, detail, module = checks.get(
+            evidence_name,
+            (False, "strategy profile has no local evidence check", "not_routed"),
+        )
+        rows.append(
+            {
+                "evidence": evidence_name,
+                "required": True,
+                "status": "available" if available else "missing",
+                "module": module,
+                "detail": detail,
+            }
+        )
+    for evidence_name in ("paper_transactions",):
+        available, detail, module = checks[evidence_name]
+        rows.append(
+            {
+                "evidence": evidence_name,
+                "required": evidence_name in required,
+                "status": "available" if available else "not_required",
+                "module": module,
+                "detail": detail,
+            }
+        )
+    return rows
+
+
+def _strategy_lab_module_routing(
+    *,
+    profile: Mapping[str, JsonValue],
+    strategy: Mapping[str, JsonValue],
+    evidence_matrix: list[JsonValue],
+) -> list[JsonValue]:
+    available_modules = {
+        str(_as_mapping(row).get("module"))
+        for row in evidence_matrix
+        if str(_as_mapping(row).get("status")) == "available"
+    }
+    module_purposes = {
+        "strategy_profile_registry": "load selected strategy contract",
+        "paper_trading_engine": "read simulated account and paper cycles",
+        "risk_engine": "evaluate approval blockers and risk decision",
+        "market_data_adapter_read_only": "read market data without order authority",
+        "indicators_feature_pipeline": "build strategy indicators and quality flags",
+        "strategy_explanation": "normalize recommendation reasons",
+        "paper_evaluation_gate": "block action when required evidence is missing",
+    }
+    rows: list[JsonValue] = []
+    for module in _as_text_tuple(profile["enabled_modules"]):
+        if module == "strategy_profile_registry":
+            status = "available"
+        elif module == "paper_evaluation_gate":
+            status = "paper_only"
+        elif module == "strategy_explanation":
+            status = (
+                "available"
+                if str(strategy.get("explanation", "")) not in {"", "not_available"}
+                else "missing"
+            )
+        else:
+            status = "available" if module in available_modules else "missing"
+        rows.append(
+            {
+                "module": module,
+                "status": status,
+                "scope": "paper_only",
+                "purpose": module_purposes.get(module, "strategy evidence module"),
+            }
+        )
+    return rows
+
+
+def _strategy_lab_parameter_config(
+    profile: Mapping[str, JsonValue],
+    parameter_profile: str,
+) -> dict[str, JsonValue]:
+    configs = _as_mapping(profile.get("parameter_profile_configs", {}))
+    value = configs.get(parameter_profile, {})
+    if not isinstance(value, Mapping):
+        return {}
+    return dict(value)
+
+
+def _strategy_lab_compare_runs(
+    *,
+    profile: Mapping[str, JsonValue],
+    status: PaperStatusResponse,
+    latest: PaperTradingCycleResult | None,
+    selected_parameter_profile: str,
+) -> list[JsonValue]:
+    backtest = _advanced_backtest_summary(status=status, latest=latest)
+    performance = _advanced_performance_summary(status)
     return [
         {
             "run_id": "current_paper",
@@ -1124,13 +2870,25 @@ def _strategy_lab_compare_runs(profile: Mapping[str, JsonValue]) -> list[JsonVal
             "parameter_profile": "default",
             "mode": "paper",
             "status": "current dashboard run",
+            "selected": selected_parameter_profile == "default",
+            "sample_size": backtest["sample_size"],
+            "win_rate": backtest["win_rate"],
+            "expectancy": backtest["expectancy"],
+            "max_drawdown": backtest["max_drawdown"],
+            "paper_pnl": performance["unrealized_pnl"],
         },
         {
             "run_id": "defensive_profile",
             "strategy": profile["label"],
             "parameter_profile": "defensive",
             "mode": "backtest",
-            "status": "ready for Stage D comparison inputs",
+            "status": "research comparison profile",
+            "selected": selected_parameter_profile == "defensive",
+            "sample_size": backtest["sample_size"],
+            "win_rate": "not_available",
+            "expectancy": "not_available",
+            "max_drawdown": backtest["max_drawdown"],
+            "paper_pnl": "research_only",
         },
     ]
 
@@ -1191,7 +2949,11 @@ def _as_text_tuple(value: JsonValue) -> tuple[str, ...]:
     return tuple(str(item) for item in value)
 
 
-def _advanced_chart_payload(cycles: tuple[PaperTradingCycleResult, ...]) -> dict[str, JsonValue]:
+def _advanced_chart_payload(
+    cycles: tuple[PaperTradingCycleResult, ...],
+    *,
+    drawings: list[JsonValue],
+) -> dict[str, JsonValue]:
     candles: list[JsonValue] = []
     indicators: list[JsonValue] = []
     markers: list[JsonValue] = []
@@ -1232,6 +2994,26 @@ def _advanced_chart_payload(cycles: tuple[PaperTradingCycleResult, ...]) -> dict
     return {
         "symbol": "BTC/USDT",
         "timeframe": "1h",
+        "available_timeframes": ["1h", "4h", "1d"],
+        "overlays": ["sma_3", "risk_lines", "markers"],
+        "interaction_features": [
+            "zoom",
+            "pan",
+            "crosshair",
+            "ohlc_tooltip",
+            "timeframe_switching",
+            "indicator_toggles",
+            "responsive_resize",
+            "local_drawing_tools",
+        ],
+        "drawing_tools": {
+            "supported_types": [item.value for item in DashboardChartDrawingType],
+            "save_route": "/api/chart-drawing",
+            "delete_route": "/api/delete-chart-drawing",
+            "storage": "local_paper_dashboard_state",
+            "paper_only": True,
+        },
+        "drawings": drawings,
         "candles": candles,
         "indicators": indicators,
         "markers": markers,
@@ -1240,6 +3022,255 @@ def _advanced_chart_payload(cycles: tuple[PaperTradingCycleResult, ...]) -> dict
             "stop_loss": _str(evaluation.plan.stop_suggestion if evaluation else None),
             "target": _str(evaluation.plan.target_suggestion if evaluation else None),
         },
+    }
+
+
+def _advanced_order_book_payload(
+    *,
+    latest: PaperTradingCycleResult | None,
+    order_book: OrderBookSnapshot | None,
+) -> dict[str, JsonValue]:
+    snapshot = order_book
+    metrics = calculate_order_book_metrics(snapshot) if snapshot is not None else None
+    if metrics is None and latest is not None:
+        metrics = latest.snapshot.order_book_metrics
+    midpoint = (
+        (metrics.best_bid + metrics.best_ask) / Decimal("2")
+        if metrics is not None
+        else DECIMAL_ZERO
+    )
+    spread_bps = (
+        metrics.spread / midpoint * Decimal("10000")
+        if metrics is not None and midpoint > DECIMAL_ZERO
+        else None
+    )
+    return {
+        "symbol": snapshot.pair.symbol if snapshot is not None else "BTC/USDT",
+        "source": snapshot.source_ref if snapshot is not None else "paper_snapshot_metrics",
+        "captured_at": snapshot.captured_at.isoformat()
+        if snapshot is not None
+        else _str(latest.snapshot.received_at if latest is not None else None),
+        "summary": {
+            "best_bid": _str(metrics.best_bid if metrics is not None else None),
+            "best_ask": _str(metrics.best_ask if metrics is not None else None),
+            "spread": _str(metrics.spread if metrics is not None else None),
+            "spread_bps": _str(
+                spread_bps.quantize(Decimal("0.0001")) if spread_bps is not None else None
+            ),
+            "bid_depth": _str(metrics.bid_depth if metrics is not None else None),
+            "ask_depth": _str(metrics.ask_depth if metrics is not None else None),
+            "imbalance": _str(metrics.imbalance if metrics is not None else None),
+            "bias": _order_book_bias(metrics.imbalance if metrics is not None else None),
+            "paper_safe": True,
+        },
+        "bids": _order_book_level_rows(snapshot.bids, descending=True)
+        if snapshot is not None
+        else [],
+        "asks": _order_book_level_rows(snapshot.asks, descending=False)
+        if snapshot is not None
+        else [],
+    }
+
+
+def _advanced_order_flow_payload(
+    *,
+    trades: tuple[Trade, ...],
+    order_book: OrderBookSnapshot | None,
+    latest: PaperTradingCycleResult | None,
+) -> dict[str, JsonValue]:
+    recent = tuple(sorted(trades, key=lambda item: item.traded_at, reverse=True)[:20])
+    buy_volume = sum(
+        (trade.quantity for trade in recent if trade.side is OrderSide.BUY),
+        DECIMAL_ZERO,
+    )
+    sell_volume = sum(
+        (trade.quantity for trade in recent if trade.side is OrderSide.SELL),
+        DECIMAL_ZERO,
+    )
+    total_volume = buy_volume + sell_volume
+    buy_pressure = buy_volume / total_volume if total_volume > DECIMAL_ZERO else DECIMAL_ZERO
+    latest_trade = recent[0] if recent else None
+    return {
+        "symbol": order_book.pair.symbol if order_book is not None else "BTC/USDT",
+        "source": _order_flow_source(trades=recent, order_book=order_book),
+        "captured_at": _str(
+            latest_trade.traded_at
+            if latest_trade is not None
+            else latest.snapshot.received_at
+            if latest is not None
+            else None
+        ),
+        "summary": {
+            "trade_count": str(len(recent)),
+            "buy_volume": str(buy_volume),
+            "sell_volume": str(sell_volume),
+            "total_volume": str(total_volume),
+            "buy_pressure_pct": _pct(buy_pressure),
+            "dominant_side": _order_flow_dominant_side(buy_pressure, len(recent)),
+            "latest_price": _str(latest_trade.price if latest_trade is not None else None),
+            "paper_safe": True,
+            "live_order_capability": False,
+        },
+        "recent_trades": [_market_trade_row(trade) for trade in recent],
+        "liquidity_heatmap": _liquidity_heatmap(order_book),
+    }
+
+
+def _order_flow_source(
+    *,
+    trades: tuple[Trade, ...],
+    order_book: OrderBookSnapshot | None,
+) -> str:
+    if trades:
+        return f"{trades[0].exchange.name}:recent-trades"
+    if order_book is not None:
+        return f"{order_book.exchange.name}:order-book-only"
+    return "not_available"
+
+
+def _order_flow_dominant_side(buy_pressure: Decimal, trade_count: int) -> str:
+    if trade_count == 0:
+        return "not_available"
+    if buy_pressure >= Decimal("0.58"):
+        return "buyer_pressure"
+    if buy_pressure <= Decimal("0.42"):
+        return "seller_pressure"
+    return "balanced"
+
+
+def _market_trade_row(trade: Trade) -> dict[str, JsonValue]:
+    return {
+        "trade_id": trade.trade_id,
+        "time": trade.traded_at.isoformat(),
+        "side": trade.side.value.upper(),
+        "price": str(trade.price),
+        "quantity": str(trade.quantity),
+        "notional": str(trade.price * trade.quantity),
+    }
+
+
+def _liquidity_heatmap(order_book: OrderBookSnapshot | None) -> list[JsonValue]:
+    if order_book is None:
+        return []
+    levels = list(order_book.bids[:5]) + list(order_book.asks[:5])
+    max_quantity = max((level.quantity for level in levels), default=DECIMAL_ZERO)
+    rows: list[JsonValue] = []
+    for side, levels_for_side in (
+        ("bid", order_book.bids[:5]),
+        ("ask", order_book.asks[:5]),
+    ):
+        for level in levels_for_side:
+            intensity = (
+                level.quantity / max_quantity if max_quantity > DECIMAL_ZERO else DECIMAL_ZERO
+            )
+            rows.append(
+                {
+                    "side": side,
+                    "price": str(level.price),
+                    "quantity": str(level.quantity),
+                    "intensity_pct": _pct(intensity),
+                }
+            )
+    return rows
+
+
+def _order_book_level_rows(
+    levels: tuple[OrderBookLevel, ...],
+    *,
+    descending: bool,
+) -> list[JsonValue]:
+    ordered = sorted(levels, key=lambda item: item.price, reverse=descending)
+    running_quantity = DECIMAL_ZERO
+    rows: list[JsonValue] = []
+    for level in ordered[:10]:
+        running_quantity += level.quantity
+        rows.append(
+            {
+                "price": str(level.price),
+                "quantity": str(level.quantity),
+                "total": str(running_quantity),
+            }
+        )
+    return rows
+
+
+def _order_book_bias(imbalance: Decimal | None) -> str:
+    if imbalance is None:
+        return "not_available"
+    if imbalance >= Decimal("0.15"):
+        return "bid_depth_dominant"
+    if imbalance <= Decimal("-0.15"):
+        return "ask_depth_dominant"
+    return "balanced"
+
+
+def _advanced_order_ticket_payload(
+    *,
+    latest: PaperTradingCycleResult | None,
+) -> dict[str, JsonValue]:
+    reference_price = (
+        latest.snapshot.candle.close if latest is not None else WATCHLIST_DEMO_PRICES["BTC/USDT"]
+    )
+    return {
+        "paper_only": True,
+        "live_order_capability": False,
+        "supported_order_types": [item.value for item in DashboardPaperOrderType],
+        "supported_sides": [OrderSide.BUY.value, OrderSide.SELL.value],
+        "default_quantity": "0.01",
+        "reference_price": str(reference_price),
+        "estimated_default_notional": str(Decimal("0.01") * reference_price),
+        "symbol_filters": PAPER_ORDER_FILTER.as_dict(),
+        "submit_route": "/api/paper-order-ticket",
+        "cancel_route": "/api/cancel-paper-order",
+        "safety_note": (
+            "Paper ticket only; no Binance order is submitted. Orders are checked against "
+            "Binance-style tick size, step size, min quantity, and min notional filters."
+        ),
+    }
+
+
+def _advanced_position_payload(
+    *,
+    status: PaperStatusResponse,
+    latest: PaperTradingCycleResult | None,
+) -> dict[str, JsonValue]:
+    portfolio = status.portfolio
+    mark_price = status.current_btc_price or portfolio.average_entry_price
+    has_position = portfolio.base_quantity > DECIMAL_ZERO
+    market_value = portfolio.base_quantity * mark_price if has_position else DECIMAL_ZERO
+    unrealized = (
+        (mark_price - portfolio.average_entry_price) * portfolio.base_quantity
+        if has_position
+        else DECIMAL_ZERO
+    )
+    unrealized_pct = (
+        (mark_price / portfolio.average_entry_price - Decimal("1"))
+        if has_position and portfolio.average_entry_price > DECIMAL_ZERO
+        else DECIMAL_ZERO
+    )
+    evaluation = latest.strategy_evaluation if latest is not None else None
+    close_quantity = portfolio.base_quantity if has_position else DECIMAL_ZERO
+    reduce_quantity = portfolio.base_quantity / Decimal("2") if has_position else DECIMAL_ZERO
+    return {
+        "symbol": "BTC/USDT",
+        "has_open_position": has_position,
+        "open_btc": str(portfolio.base_quantity),
+        "average_entry": str(portfolio.average_entry_price),
+        "mark_price": str(mark_price),
+        "market_value": str(market_value),
+        "unrealized_pnl": str(unrealized),
+        "unrealized_pnl_pct": _pct(unrealized_pct),
+        "realized_pnl": str(portfolio.realized_pnl),
+        "stop_loss": _str(evaluation.plan.stop_suggestion if evaluation else None),
+        "target": _str(evaluation.plan.target_suggestion if evaluation else None),
+        "close_quantity": str(close_quantity),
+        "reduce_quantity": str(reduce_quantity),
+        "can_stage_close": has_position,
+        "can_stage_reduce": has_position,
+        "paper_only": True,
+        "live_order_capability": False,
+        "close_route": "/api/stage-close-position",
+        "reduce_route": "/api/stage-reduce-position",
     }
 
 
@@ -1284,6 +3315,355 @@ def _advanced_performance_summary(status: PaperStatusResponse) -> dict[str, Json
         "fees_paid": str(status.portfolio.fees_paid),
         "trades": str(status.trades_count),
     }
+
+
+def _advanced_risk_safety_payload(
+    *,
+    status: PaperStatusResponse,
+    latest: PaperTradingCycleResult | None,
+    market: Mapping[str, JsonValue],
+    portfolio: Mapping[str, JsonValue],
+    controls: Mapping[str, JsonValue],
+    order_book: OrderBookSnapshot | None,
+    recent_market_trades: tuple[Trade, ...],
+    transactions: list[JsonValue],
+    open_orders: list[JsonValue],
+    events: list[JsonValue],
+) -> dict[str, JsonValue]:
+    risk_halts = _risk_halts(status)
+    order_book_metrics = (
+        calculate_order_book_metrics(order_book) if order_book is not None else None
+    )
+    spread_bps = _spread_bps(order_book_metrics)
+    data_reasons = _risk_safety_data_reasons(status=status, latest=latest, market=market)
+    exchange_rows = _risk_safety_exchange_rows(
+        market=market,
+        order_book=order_book,
+        order_book_metrics=order_book_metrics,
+        recent_market_trades=recent_market_trades,
+    )
+    reconciliation = _risk_safety_reconciliation(
+        status=status,
+        portfolio=portfolio,
+        transactions=transactions,
+        open_orders=open_orders,
+        events=events,
+    )
+    blocking_reasons = [
+        reason
+        for reason in ([] if risk_halts == ("none",) else list(risk_halts)) + data_reasons
+        if reason != "none"
+    ]
+    return {
+        "paper_only": True,
+        "live_order_capability": False,
+        "summary": {
+            "safety_state": "blocked" if blocking_reasons else "clear",
+            "data_health": status.data_health,
+            "market_data_health": str(market.get("data_freshness", "not_available")),
+            "latest_risk_decision": status.latest_risk_decision,
+            "drawdown": str(status.portfolio.drawdown_pct),
+            "risk_halts": list(risk_halts),
+            "paused": status.paused,
+            "kill_switch_active": status.kill_switch_active,
+            "open_paper_orders": str(len(open_orders)),
+            "spread_bps": _str(spread_bps),
+        },
+        "risk_checks": [
+            _risk_safety_check(
+                "risk_decision",
+                status.latest_risk_decision == "approved",
+                status.latest_risk_decision,
+            ),
+            _risk_safety_check(
+                "drawdown_halt",
+                status.portfolio.drawdown_pct < Decimal("0.05"),
+                f"drawdown={status.portfolio.drawdown_pct}, limit=0.05",
+            ),
+            _risk_safety_check("risk_halts", risk_halts == ("none",), "; ".join(risk_halts)),
+            _risk_safety_check("paper_paused", not status.paused, str(status.paused)),
+            _risk_safety_check(
+                "kill_switch",
+                not status.kill_switch_active,
+                str(status.kill_switch_active),
+            ),
+            _risk_safety_check(
+                "data_quality",
+                not data_reasons,
+                "; ".join(data_reasons) if data_reasons else status.data_health,
+            ),
+            _risk_safety_check(
+                "spread",
+                spread_bps is None or spread_bps <= Decimal("25"),
+                f"spread_bps={_str(spread_bps)}, limit=25",
+            ),
+        ],
+        "parameter_health": [_parameter_health_row(item) for item in status.parameter_health],
+        "exchange_health": exchange_rows,
+        "reconciliation": reconciliation,
+        "unsupported_markets": {
+            "live_trading": False,
+            "leverage": False,
+            "margin": False,
+            "futures": False,
+            "options": False,
+            "withdrawals": False,
+            "transfers": False,
+        },
+    }
+
+
+def _spread_bps(metrics: OrderBookMetrics | None) -> Decimal | None:
+    if metrics is None:
+        return None
+    midpoint = (metrics.best_bid + metrics.best_ask) / Decimal("2")
+    if midpoint <= DECIMAL_ZERO:
+        return None
+    return (metrics.spread / midpoint * Decimal("10000")).quantize(Decimal("0.0001"))
+
+
+def _risk_safety_data_reasons(
+    *,
+    status: PaperStatusResponse,
+    latest: PaperTradingCycleResult | None,
+    market: Mapping[str, JsonValue],
+) -> list[str]:
+    reasons: list[str] = []
+    if status.data_health not in {"trusted", "healthy"}:
+        reasons.append(f"paper data health is {status.data_health}")
+    market_health = str(market.get("data_freshness", "not_available"))
+    if market_health != "healthy":
+        reasons.append(f"market data health is {market_health}")
+    if latest is not None and latest.snapshot.health.is_stale:
+        reasons.append("latest stream is stale")
+    if latest is not None and latest.skipped_reason:
+        reasons.append(latest.skipped_reason)
+    return reasons
+
+
+def _risk_safety_exchange_rows(
+    *,
+    market: Mapping[str, JsonValue],
+    order_book: OrderBookSnapshot | None,
+    order_book_metrics: OrderBookMetrics | None,
+    recent_market_trades: tuple[Trade, ...],
+) -> list[JsonValue]:
+    return [
+        {
+            "check": "market_data_source",
+            "status": "available" if market.get("source") else "missing",
+            "detail": str(market.get("source", "not_available")),
+        },
+        {
+            "check": "order_book",
+            "status": "available" if order_book is not None else "missing",
+            "detail": order_book.source_ref if order_book is not None else "not_available",
+        },
+        {
+            "check": "spread_depth",
+            "status": "available" if order_book_metrics is not None else "missing",
+            "detail": (
+                f"bid_depth={order_book_metrics.bid_depth}, "
+                f"ask_depth={order_book_metrics.ask_depth}"
+                if order_book_metrics is not None
+                else "not_available"
+            ),
+        },
+        {
+            "check": "recent_trades",
+            "status": "available" if recent_market_trades else "missing",
+            "detail": str(len(recent_market_trades)),
+        },
+        {
+            "check": "live_execution",
+            "status": "disabled",
+            "detail": "paper dashboard cannot create live orders",
+        },
+    ]
+
+
+def _risk_safety_reconciliation(
+    *,
+    status: PaperStatusResponse,
+    portfolio: Mapping[str, JsonValue],
+    transactions: list[JsonValue],
+    open_orders: list[JsonValue],
+    events: list[JsonValue],
+) -> list[JsonValue]:
+    paper_fill_events = [
+        event
+        for event in events
+        if isinstance(event, Mapping) and event.get("event_type") == "paper_fill"
+    ]
+    return [
+        _risk_safety_check(
+            "transaction_count",
+            len(transactions) == status.trades_count,
+            f"transactions={len(transactions)}, status_trades={status.trades_count}",
+        ),
+        _risk_safety_check(
+            "paper_fill_audit",
+            not transactions or bool(paper_fill_events),
+            f"paper_fill_events={len(paper_fill_events)}",
+        ),
+        _risk_safety_check(
+            "cash_non_negative",
+            _decimal(portfolio.get("cash", "0")) >= DECIMAL_ZERO,
+            f"cash={portfolio.get('cash', 'not_available')}",
+        ),
+        _risk_safety_check(
+            "open_order_rows",
+            all(
+                isinstance(item, Mapping) and item.get("paper_only") is True for item in open_orders
+            ),
+            f"open_orders={len(open_orders)}",
+        ),
+    ]
+
+
+def _risk_safety_check(check: str, passed: bool, detail: str) -> dict[str, JsonValue]:
+    return {
+        "check": check,
+        "status": "pass" if passed else "review",
+        "passed": passed,
+        "detail": detail,
+        "paper_only": True,
+    }
+
+
+def _parameter_health_row(item: PaperParameterHealth) -> dict[str, JsonValue]:
+    return {
+        "key": item.key,
+        "value": item.value,
+        "status": item.status,
+        "reason": item.reason,
+    }
+
+
+def _advanced_trade_journal_payload(
+    *,
+    transactions: list[JsonValue],
+    journal_entries: list[JsonValue],
+    status: PaperStatusResponse,
+    latest: PaperTradingCycleResult | None,
+) -> dict[str, JsonValue]:
+    entry_mappings = [_as_mapping(item) for item in journal_entries if isinstance(item, Mapping)]
+    entries: list[JsonValue] = [dict(entry) for entry in entry_mappings]
+    transaction_count = len(transactions)
+    journaled_refs = {
+        str(entry.get("trade_ref", "")).strip()
+        for entry in entry_mappings
+        if str(entry.get("trade_ref", "")).strip()
+    }
+    strategy_name = (
+        latest.strategy_evaluation.strategy_name
+        if latest is not None and latest.strategy_evaluation is not None
+        else "MinRiskSpotStrategyV1"
+    )
+    total_pnl = status.portfolio.realized_pnl + _unrealized_pnl_decimal(status)
+    mistake_count = sum(
+        1 for entry in entry_mappings if str(entry.get("mistake_review", "")).strip()
+    )
+    lesson_count = sum(1 for entry in entry_mappings if str(entry.get("lesson", "")).strip())
+    tag_counts = _journal_tag_counts(entry_mappings)
+    return {
+        "paper_only": True,
+        "live_order_capability": False,
+        "add_route": "/api/journal-entry",
+        "delete_route": "/api/delete-journal-entry",
+        "supported_setup_types": [
+            "trend_continuation",
+            "pullback",
+            "breakout",
+            "mean_reversion",
+            "risk_reduction",
+            "manual_review",
+        ],
+        "summary": {
+            "transactions": str(transaction_count),
+            "journal_entries": str(len(entries)),
+            "journaled_trade_refs": str(len(journaled_refs)),
+            "unjournaled_transactions": str(max(transaction_count - len(journaled_refs), 0)),
+            "mistakes_logged": str(mistake_count),
+            "lessons_logged": str(lesson_count),
+            "tags_used": str(len(tag_counts)),
+            "attribution_scope": "paper_mark_to_market",
+        },
+        "pnl_by_strategy": [
+            {
+                "strategy": strategy_name,
+                "paper_pnl": str(total_pnl),
+                "transactions": str(transaction_count),
+                "journal_entries": str(len(entries)),
+                "scope": "current paper account mark-to-market",
+            }
+        ],
+        "pnl_by_regime": [
+            {
+                "regime": status.active_regime,
+                "paper_pnl": str(total_pnl),
+                "transactions": str(transaction_count),
+                "journal_entries": str(len(entries)),
+                "scope": "current paper account mark-to-market",
+            }
+        ],
+        "tag_breakdown": [
+            {"tag": tag, "count": str(count)} for tag, count in sorted(tag_counts.items())
+        ],
+        "entries": entries,
+        "chart_context_hint": _journal_chart_context_hint(latest),
+    }
+
+
+def _advanced_trader_feedback_payload(items: list[JsonValue]) -> dict[str, JsonValue]:
+    feedback = [_as_mapping(item) for item in items if isinstance(item, Mapping)]
+    open_items = [item for item in feedback if str(item.get("status", "")) == "open"]
+    return {
+        "paper_only": True,
+        "add_route": "/api/trader-feedback",
+        "close_route": "/api/close-trader-feedback",
+        "supported_reviewer_roles": [
+            "trader",
+            "risk_reviewer",
+            "strategy_reviewer",
+            "operator",
+            "developer",
+        ],
+        "supported_categories": [
+            "ui",
+            "risk",
+            "strategy",
+            "market_data",
+            "order_ticket",
+            "reporting",
+            "missing_feature",
+        ],
+        "supported_severities": ["low", "medium", "high", "blocker"],
+        "summary": {
+            "total": str(len(feedback)),
+            "open": str(len(open_items)),
+            "closed": str(len(feedback) - len(open_items)),
+            "blockers": str(
+                sum(1 for item in open_items if str(item.get("severity", "")) == "blocker")
+            ),
+            "high": str(sum(1 for item in open_items if str(item.get("severity", "")) == "high")),
+        },
+        "category_breakdown": _feedback_count_rows(feedback, key="category"),
+        "severity_breakdown": _feedback_count_rows(open_items, key="severity"),
+        "items": [dict(item) for item in feedback],
+    }
+
+
+def _feedback_count_rows(
+    items: list[Mapping[str, JsonValue]],
+    *,
+    key: str,
+) -> list[JsonValue]:
+    counts: dict[str, int] = {}
+    for item in items:
+        value = str(item.get(key, "unknown"))
+        counts[value] = counts.get(value, 0) + 1
+    return [{key: value, "count": str(count)} for value, count in sorted(counts.items())]
 
 
 def _advanced_exit_review(
@@ -1475,6 +3855,9 @@ def _dashboard_readiness_gate(
     controls = _as_mapping(payload["controls"])
     unsupported_markets = _as_mapping(payload["unsupported_markets"])
     transactions = _as_list(payload["transactions"])
+    trader_feedback = _as_mapping(advanced.get("trader_feedback", {}))
+    trader_feedback_summary = _as_mapping(trader_feedback.get("summary", {}))
+    open_feedback_blockers = _decimal(trader_feedback_summary.get("blockers", "0"))
     route_checks = _paper_safe_route_checks()
     reconstructability = _paper_trade_reconstructability(
         cycles=cycles,
@@ -1495,6 +3878,18 @@ def _dashboard_readiness_gate(
                 advanced,
                 (
                     "chart",
+                    "chart_drawings",
+                    "order_book",
+                    "order_flow",
+                    "order_ticket",
+                    "open_paper_orders",
+                    "position",
+                    "watchlist",
+                    "alerts",
+                    "alert_rules",
+                    "risk_safety",
+                    "trade_journal",
+                    "trader_feedback",
                     "backtest_summary",
                     "performance",
                     "exit_review",
@@ -1551,11 +3946,26 @@ def _dashboard_readiness_gate(
             "SQLite repository is the main ledger when ABTP_PAPER_DB_PATH is configured.",
             blocking=False,
         ),
+        _readiness_item(
+            "open_trader_feedback_blockers",
+            "No open trader feedback blockers",
+            open_feedback_blockers == DECIMAL_ZERO,
+            f"open_blocker_feedback={open_feedback_blockers}",
+        ),
     ]
     ready = all(
         _as_mapping(item).get("passed") is True
         for item in checklist
         if _as_mapping(item).get("blocking") is True
+    )
+    trader_verdict = _trader_readiness_verdict(
+        ready=ready,
+        checklist=checklist,
+        reconstructability=reconstructability,
+        advanced=advanced,
+        strategy_lab=strategy_lab,
+        route_checks=route_checks,
+        db_path=db_path,
     )
     return {
         "ready": ready,
@@ -1573,6 +3983,7 @@ def _dashboard_readiness_gate(
         "routes": route_checks,
         "trade_reconstructability": reconstructability,
         "checklist": checklist,
+        "trader_verdict": trader_verdict,
     }
 
 
@@ -1598,15 +4009,117 @@ def _has_keys(payload: Mapping[str, JsonValue], keys: tuple[str, ...]) -> bool:
     return all(key in payload for key in keys)
 
 
+def _trader_readiness_verdict(
+    *,
+    ready: bool,
+    checklist: list[JsonValue],
+    reconstructability: Mapping[str, JsonValue],
+    advanced: Mapping[str, JsonValue],
+    strategy_lab: Mapping[str, JsonValue],
+    route_checks: list[JsonValue],
+    db_path: str | None,
+) -> dict[str, JsonValue]:
+    blocking_failures = [
+        str(_as_mapping(item).get("label"))
+        for item in checklist
+        if _as_mapping(item).get("blocking") is True and _as_mapping(item).get("passed") is not True
+    ]
+    backtest = _as_mapping(advanced.get("backtest_summary", {}))
+    risk_safety = _as_mapping(advanced.get("risk_safety", {}))
+    trader_feedback = _as_mapping(advanced.get("trader_feedback", {}))
+    feedback_items = _as_list(trader_feedback.get("items", []))
+    strategy_missing = [
+        str(item) for item in _as_text_list(strategy_lab.get("missing_evidence", []))
+    ]
+    open_feedback_blockers = [
+        _as_mapping(item)
+        for item in feedback_items
+        if isinstance(item, Mapping)
+        and str(item.get("status", "")) == "open"
+        and str(item.get("severity", "")) == "blocker"
+    ]
+    sample_warning = str(backtest.get("sample_size_warning", "not_available"))
+    proof_points: list[JsonValue] = [
+        "Beginner, Advanced Trader, and Strategy Lab views are present.",
+        "All dashboard routes are read-only, preference-only, or paper-control only.",
+        "Live execution, margin, futures, options, withdrawals, and transfers are disabled.",
+        "Paper trade reconstructability is checked from market data through account update.",
+        "Strategy Lab exposes required evidence, module routing, and compare-run rows.",
+    ]
+    if db_path is not None:
+        proof_points.append("SQLite paper ledger is configured for local audit history.")
+    if _as_mapping(risk_safety.get("summary", {})).get("safety_state") == "clear":
+        proof_points.append("Risk and safety panel currently reports clear paper-mode status.")
+    blockers: list[JsonValue] = list(blocking_failures)
+    if strategy_missing:
+        blockers.append("Strategy Lab is missing required evidence: " + ", ".join(strategy_missing))
+    for item in open_feedback_blockers:
+        blockers.append(
+            "Open trader feedback blocker: "
+            f"{item.get('category', 'unknown')} - {item.get('summary', 'not_available')}"
+        )
+    warnings: list[JsonValue] = [
+        "Paper-mode readiness does not prove profitability.",
+        sample_warning,
+        "Any live trading stage still requires a separate supervised-live review.",
+        (
+            "Trader review should verify chart usability, order-ticket ergonomics, "
+            "and strategy assumptions."
+        ),
+    ]
+    next_steps: list[JsonValue] = [
+        "Run a longer paper session with real read-only Binance market data.",
+        "Export the paper report and transaction CSV after multiple market conditions.",
+        "Ask traders to review the Advanced Trader and Strategy Lab evidence layout.",
+    ]
+    if open_feedback_blockers:
+        next_steps.insert(0, "Close or resolve open blocker-severity trader feedback.")
+    if not db_path:
+        next_steps.insert(0, "Configure ABTP_PAPER_DB_PATH so SQLite is the main paper ledger.")
+    return {
+        "paper_demo_ready": ready and not blockers,
+        "live_capital_ready": False,
+        "readiness_level": "paper_demo_ready" if ready and not blockers else "blocked",
+        "shareable_scope": (
+            "paper-mode trader review only"
+            if ready and not blockers
+            else "internal testing until blockers are fixed"
+        ),
+        "profitability_claim": "none",
+        "route_count": str(len(route_checks)),
+        "reconstructability_status": str(reconstructability.get("status", "not_available")),
+        "proof_points": proof_points,
+        "blockers": blockers,
+        "warnings": warnings,
+        "next_steps": next_steps,
+    }
+
+
 def _paper_safe_route_checks() -> list[JsonValue]:
     routes = (
         ("GET /", "Dashboard shell only"),
         ("GET /api/status", "Read-only paper dashboard status"),
         ("GET /api/readiness", "Read-only readiness checklist"),
         ("GET /paper-report", "Read-only paper report export"),
+        ("GET /trader-handoff.md", "Read-only trader review handoff export"),
+        ("GET /trader-evidence.json", "Read-only trader evidence JSON export"),
         ("GET /paper-transactions.csv", "Read-only paper transaction export"),
+        ("GET /trader-feedback.csv", "Read-only trader feedback CSV export"),
         ("POST /api/ui-mode", "UI preference only"),
         ("POST /api/strategy-lab-selection", "Strategy Lab preference only"),
+        ("POST /api/watchlist-symbol", "Watchlist preference only"),
+        ("POST /api/alert-rule", "Creates local dashboard alert rule only"),
+        ("POST /api/delete-alert-rule", "Deletes local dashboard alert rule only"),
+        ("POST /api/journal-entry", "Saves local paper trade journal note only"),
+        ("POST /api/delete-journal-entry", "Deletes local paper journal note only"),
+        ("POST /api/trader-feedback", "Saves local trader-review feedback only"),
+        ("POST /api/close-trader-feedback", "Closes local trader-review feedback only"),
+        ("POST /api/chart-drawing", "Saves local chart drawing only"),
+        ("POST /api/delete-chart-drawing", "Deletes local chart drawing only"),
+        ("POST /api/paper-order-ticket", "Stages simulated paper order ticket only"),
+        ("POST /api/cancel-paper-order", "Cancels simulated paper order ticket only"),
+        ("POST /api/stage-close-position", "Stages simulated close-position review only"),
+        ("POST /api/stage-reduce-position", "Stages simulated reduce-position review only"),
         ("POST /api/approve-paper-trade", "Applies simulated paper fill only"),
         ("POST /api/reject-recommendation", "Records paper operator rejection"),
         ("POST /api/pause-paper-bot", "Pauses paper bot only"),
@@ -1799,6 +4312,7 @@ def _paper_dashboard_state_payload(controller: PaperDashboardController) -> dict
         "market_data_source": controller.market_data_source,
         "ui_preferences": {
             "mode": controller.ui_mode.value,
+            "selected_watchlist_symbol": controller.selected_watchlist_symbol,
             "strategy_lab": {
                 "strategy": controller.strategy_lab_strategy,
                 "symbol": controller.strategy_lab_symbol,
@@ -1816,6 +4330,11 @@ def _paper_dashboard_state_payload(controller: PaperDashboardController) -> dict
             "equity_history": [str(value) for value in state.equity_history],
         },
         "trades": [_paper_trade_as_dict(trade) for trade in controller.engine.account.trades],
+        "open_paper_orders": [order.as_dict() for order in controller.open_paper_orders],
+        "alert_rules": [rule.as_dict() for rule in controller.alert_rules],
+        "journal_entries": [entry.as_dict() for entry in controller.journal_entries],
+        "trader_feedback": [item.as_dict() for item in controller.trader_feedback],
+        "chart_drawings": [drawing.as_dict() for drawing in controller.chart_drawings],
     }
 
 
@@ -1828,6 +4347,9 @@ def _restore_paper_payload(
     preferences = payload.get("ui_preferences", {})
     if isinstance(preferences, Mapping):
         controller.ui_mode = _ui_mode(str(preferences.get("mode", controller.ui_mode.value)))
+        controller.selected_watchlist_symbol = _watchlist_symbol(
+            str(preferences.get("selected_watchlist_symbol", controller.selected_watchlist_symbol))
+        )
         strategy_lab = preferences.get("strategy_lab", {})
         if isinstance(strategy_lab, Mapping):
             restored_strategy = _strategy_profile(
@@ -1864,6 +4386,41 @@ def _restore_paper_payload(
         _paper_trade_from_mapping(item) for item in trades_payload if isinstance(item, Mapping)
     )
     controller.engine.account.restore_state(account_state, trades)
+    open_orders_payload = payload.get("open_paper_orders", [])
+    if isinstance(open_orders_payload, list):
+        controller.open_paper_orders = [
+            _paper_order_from_mapping(item)
+            for item in open_orders_payload
+            if isinstance(item, Mapping)
+        ]
+    alert_rules_payload = payload.get("alert_rules", [])
+    if isinstance(alert_rules_payload, list):
+        controller.alert_rules = [
+            _alert_rule_from_mapping(item)
+            for item in alert_rules_payload
+            if isinstance(item, Mapping)
+        ]
+    journal_entries_payload = payload.get("journal_entries", [])
+    if isinstance(journal_entries_payload, list):
+        controller.journal_entries = [
+            _journal_entry_from_mapping(item)
+            for item in journal_entries_payload
+            if isinstance(item, Mapping)
+        ]
+    trader_feedback_payload = payload.get("trader_feedback", [])
+    if isinstance(trader_feedback_payload, list):
+        controller.trader_feedback = [
+            _trader_feedback_from_mapping(item)
+            for item in trader_feedback_payload
+            if isinstance(item, Mapping)
+        ]
+    chart_drawings_payload = payload.get("chart_drawings", [])
+    if isinstance(chart_drawings_payload, list):
+        controller.chart_drawings = [
+            _chart_drawing_from_mapping(item)
+            for item in chart_drawings_payload
+            if isinstance(item, Mapping)
+        ]
     controller.events.insert(
         0,
         PaperDashboardEvent(
@@ -2006,8 +4563,124 @@ def _paper_trade_from_mapping(payload: Mapping[str, JsonValue]) -> PaperTrade:
     )
 
 
+def _paper_order_from_mapping(payload: Mapping[str, JsonValue]) -> DashboardPaperOrder:
+    created_at = datetime.fromisoformat(str(payload.get("created_at", DEFAULT_NOW.isoformat())))
+    return DashboardPaperOrder(
+        order_id=str(payload["order_id"]),
+        order_type=DashboardPaperOrderType(str(payload["order_type"])),
+        side=OrderSide(str(payload["side"])),
+        quantity=_decimal(payload["quantity"]),
+        created_at=created_at,
+        status=DashboardPaperOrderStatus(str(payload.get("status", "open"))),
+        symbol=str(payload.get("symbol", "BTC/USDT")),
+        limit_price=_optional_decimal_from_json(payload.get("limit_price")),
+        stop_price=_optional_decimal_from_json(payload.get("stop_price")),
+        take_profit_price=_optional_decimal_from_json(payload.get("take_profit_price")),
+        reason=str(payload.get("reason", "")),
+    )
+
+
+def _alert_rule_from_mapping(payload: Mapping[str, JsonValue]) -> DashboardAlertRule:
+    created_at = datetime.fromisoformat(str(payload.get("created_at", DEFAULT_NOW.isoformat())))
+    return DashboardAlertRule(
+        alert_id=str(payload["alert_id"]),
+        alert_type=DashboardAlertType(str(payload["alert_type"])),
+        symbol=_watchlist_symbol(str(payload["symbol"])),
+        threshold=_optional_decimal_from_json(payload.get("threshold")),
+        expected_value=str(payload.get("expected_value", "")),
+        enabled=bool(payload.get("enabled", True)),
+        created_at=created_at,
+    )
+
+
+def _journal_entry_from_mapping(payload: Mapping[str, JsonValue]) -> DashboardJournalEntry:
+    created_at = datetime.fromisoformat(str(payload.get("created_at", DEFAULT_NOW.isoformat())))
+    updated_at = datetime.fromisoformat(str(payload.get("updated_at", created_at.isoformat())))
+    tags_payload = payload.get("tags", [])
+    tags = tuple(str(item) for item in tags_payload) if isinstance(tags_payload, list) else ()
+    return DashboardJournalEntry(
+        journal_id=str(payload["journal_id"]),
+        trade_ref=str(payload.get("trade_ref", "")),
+        symbol=_watchlist_symbol(str(payload.get("symbol", "BTC/USDT"))),
+        setup_type=_journal_setup_type(str(payload.get("setup_type", "manual_review"))),
+        tags=tags,
+        notes=str(payload.get("notes", "")),
+        mistake_review=str(payload.get("mistake_review", "")),
+        lesson=str(payload.get("lesson", "")),
+        chart_context=str(payload.get("chart_context", "")),
+        strategy=str(payload.get("strategy", "MinRiskSpotStrategyV1")),
+        regime=str(payload.get("regime", "unknown")),
+        created_at=created_at,
+        updated_at=updated_at,
+    )
+
+
+def _trader_feedback_from_mapping(payload: Mapping[str, JsonValue]) -> DashboardTraderFeedback:
+    created_at = datetime.fromisoformat(str(payload.get("created_at", DEFAULT_NOW.isoformat())))
+    resolved_at_raw = str(payload.get("resolved_at", "")).strip()
+    return DashboardTraderFeedback(
+        feedback_id=str(payload["feedback_id"]),
+        reviewer_role=_trader_feedback_reviewer_role(str(payload.get("reviewer_role", "trader"))),
+        category=_trader_feedback_category(str(payload.get("category", "ui"))),
+        severity=_trader_feedback_severity(str(payload.get("severity", "medium"))),
+        summary=str(payload.get("summary", "")),
+        recommendation=str(payload.get("recommendation", "")),
+        status=str(payload.get("status", "open")),
+        created_at=created_at,
+        resolution=str(payload.get("resolution", "")),
+        resolved_at=datetime.fromisoformat(resolved_at_raw) if resolved_at_raw else None,
+    )
+
+
+def _chart_drawing_from_mapping(payload: Mapping[str, JsonValue]) -> DashboardChartDrawing:
+    created_at = datetime.fromisoformat(str(payload.get("created_at", DEFAULT_NOW.isoformat())))
+    return DashboardChartDrawing(
+        drawing_id=str(payload["drawing_id"]),
+        drawing_type=DashboardChartDrawingType(str(payload["drawing_type"])),
+        symbol=_watchlist_symbol(str(payload.get("symbol", "BTC/USDT"))),
+        timeframe=_chart_drawing_timeframe(str(payload.get("timeframe", "1h"))),
+        start_time=str(payload.get("start_time", DEFAULT_NOW.isoformat())),
+        end_time=str(payload.get("end_time", "")),
+        start_price=_decimal(payload["start_price"]),
+        end_price=_optional_decimal_from_json(payload.get("end_price")),
+        text=str(payload.get("text", "")),
+        color=_chart_drawing_color(str(payload.get("color", "#1264a3"))),
+        enabled=bool(payload.get("enabled", True)),
+        created_at=created_at,
+    )
+
+
 def _decimal(value: object) -> Decimal:
     return value if isinstance(value, Decimal) else Decimal(str(value))
+
+
+def _optional_decimal_from_json(value: object | None) -> Decimal | None:
+    if value in (None, "", "not_available"):
+        return None
+    return _decimal(value)
+
+
+def _required_positive_decimal(value: str, label: str) -> Decimal:
+    parsed = _decimal(value)
+    if parsed <= DECIMAL_ZERO:
+        raise PaperDashboardActionError(f"paper order {label} must be positive")
+    return parsed
+
+
+def _required_non_negative_decimal(value: str, label: str) -> Decimal:
+    parsed = _decimal(value)
+    if parsed < DECIMAL_ZERO:
+        raise PaperDashboardActionError(f"paper order {label} cannot be negative")
+    return parsed
+
+
+def _optional_positive_decimal(value: str | None, label: str) -> Decimal | None:
+    if value is None or not value.strip():
+        return None
+    parsed = _decimal(value)
+    if parsed <= DECIMAL_ZERO:
+        raise PaperDashboardActionError(f"paper order {label} must be positive")
+    return parsed
 
 
 def _latest_spread(latest: PaperTradingCycleResult | None) -> Decimal | None:
@@ -2017,11 +4690,15 @@ def _latest_spread(latest: PaperTradingCycleResult | None) -> Decimal | None:
 
 
 def _unrealized_pnl(status: PaperStatusResponse) -> str:
+    return str(_unrealized_pnl_decimal(status))
+
+
+def _unrealized_pnl_decimal(status: PaperStatusResponse) -> Decimal:
     portfolio = status.portfolio
     price = status.current_btc_price or portfolio.average_entry_price
     if portfolio.base_quantity <= DECIMAL_ZERO:
-        return "0"
-    return str((price - portfolio.average_entry_price) * portfolio.base_quantity)
+        return DECIMAL_ZERO
+    return (price - portfolio.average_entry_price) * portfolio.base_quantity
 
 
 def _risk_halts(status: PaperStatusResponse) -> tuple[str, ...]:

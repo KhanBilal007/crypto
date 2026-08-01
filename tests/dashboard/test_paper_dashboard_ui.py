@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 from http import HTTPStatus
 from pathlib import Path
@@ -67,12 +68,101 @@ def test_advanced_trader_view_has_chart_metrics_exit_review_and_exports(tmp_path
 
     assert advanced["chart"]["symbol"] == "BTC/USDT"  # type: ignore[index]
     assert len(advanced["chart"]["candles"]) == 4  # type: ignore[index]
+    assert advanced["chart"]["available_timeframes"] == ["1h", "4h", "1d"]  # type: ignore[index]
+    assert advanced["chart"]["overlays"] == ["sma_3", "risk_lines", "markers"]  # type: ignore[index]
+    assert "horizontal_level" in advanced["chart"]["drawing_tools"]["supported_types"]  # type: ignore[index]
+    assert advanced["chart"]["drawing_tools"]["paper_only"] is True  # type: ignore[index]
+    assert advanced["chart"]["drawings"] == []  # type: ignore[index]
+    assert advanced["chart_drawings"] == []  # type: ignore[index]
+    assert {
+        "zoom",
+        "pan",
+        "crosshair",
+        "ohlc_tooltip",
+        "timeframe_switching",
+        "indicator_toggles",
+        "responsive_resize",
+        "local_drawing_tools",
+    }.issubset(set(advanced["chart"]["interaction_features"]))  # type: ignore[index]
     assert advanced["chart"]["risk_lines"]["stop_loss"] != "not_available"  # type: ignore[index]
     assert advanced["backtest_summary"]["sample_size"] == "4"  # type: ignore[index]
     assert "Very small sample" in advanced["backtest_summary"]["sample_size_warning"]  # type: ignore[index]
     assert int(advanced["performance"]["trades"]) >= 1  # type: ignore[arg-type,index]
     assert "recommendation" in advanced["exit_review"]  # type: ignore[index]
     assert advanced["exports"]["transactions_csv"] == "/paper-transactions.csv"  # type: ignore[index]
+    assert advanced["exports"]["trader_feedback_csv"] == "/trader-feedback.csv"  # type: ignore[index]
+    assert advanced["exports"]["trader_handoff"] == "/trader-handoff.md"  # type: ignore[index]
+    assert advanced["exports"]["trader_evidence_json"] == "/trader-evidence.json"  # type: ignore[index]
+    assert advanced["order_book"]["summary"]["best_bid"] == "103.99"  # type: ignore[index]
+    assert advanced["order_book"]["summary"]["best_ask"] == "104.01"  # type: ignore[index]
+    assert advanced["order_book"]["summary"]["spread_bps"] == "1.9231"  # type: ignore[index]
+    assert advanced["order_book"]["summary"]["bias"] == "balanced"  # type: ignore[index]
+    assert len(advanced["order_book"]["bids"]) == 5  # type: ignore[index]
+    assert len(advanced["order_book"]["asks"]) == 5  # type: ignore[index]
+    assert advanced["order_flow"]["summary"]["trade_count"] == "8"  # type: ignore[index]
+    assert advanced["order_flow"]["summary"]["paper_safe"] is True  # type: ignore[index]
+    assert advanced["order_flow"]["summary"]["live_order_capability"] is False  # type: ignore[index]
+    assert len(advanced["order_flow"]["recent_trades"]) == 8  # type: ignore[index]
+    assert len(advanced["order_flow"]["liquidity_heatmap"]) == 10  # type: ignore[index]
+    assert advanced["order_ticket"]["paper_only"] is True  # type: ignore[index]
+    assert advanced["order_ticket"]["live_order_capability"] is False  # type: ignore[index]
+    assert "oco" in advanced["order_ticket"]["supported_order_types"]  # type: ignore[index]
+    assert advanced["order_ticket"]["symbol_filters"]["tick_size"] == "0.01"  # type: ignore[index]
+    assert advanced["order_ticket"]["symbol_filters"]["step_size"] == "0.0001"  # type: ignore[index]
+    assert advanced["order_ticket"]["symbol_filters"]["min_notional"] == "1"  # type: ignore[index]
+    assert advanced["watchlist"]["selected_symbol"] == "BTC/USDT"  # type: ignore[index]
+    assert advanced["watchlist"]["paper_strategy_symbol"] == "BTC/USDT"  # type: ignore[index]
+    assert advanced["watchlist"]["can_paper_trade_selected"] is True  # type: ignore[index]
+    assert {item["symbol"] for item in advanced["watchlist"]["symbols"]} == {  # type: ignore[index]
+        "BTC/USDT",
+        "ETH/USDT",
+        "SOL/USDT",
+    }
+    assert "price_above" in advanced["alerts"]["supported_alert_types"]  # type: ignore[index]
+    assert "indicator_confidence" in advanced["alerts"]["supported_alert_types"]  # type: ignore[index]
+    assert "drawdown_above" in advanced["alerts"]["supported_alert_types"]  # type: ignore[index]
+    assert "stale_data" in advanced["alerts"]["supported_alert_types"]  # type: ignore[index]
+    assert "paper_order_event" in advanced["alerts"]["supported_alert_types"]  # type: ignore[index]
+    assert advanced["alerts"]["notification_scope"] == "local_dashboard_only"  # type: ignore[index]
+    assert advanced["alert_rules"] == []  # type: ignore[index]
+    assert advanced["risk_safety"]["paper_only"] is True  # type: ignore[index]
+    assert advanced["risk_safety"]["live_order_capability"] is False  # type: ignore[index]
+    assert advanced["risk_safety"]["summary"]["safety_state"] == "clear"  # type: ignore[index]
+    assert advanced["risk_safety"]["summary"]["latest_risk_decision"] == "approved"  # type: ignore[index]
+    assert advanced["risk_safety"]["unsupported_markets"]["live_trading"] is False  # type: ignore[index]
+    assert {item["check"] for item in advanced["risk_safety"]["risk_checks"]} >= {  # type: ignore[index]
+        "risk_decision",
+        "drawdown_halt",
+        "data_quality",
+        "spread",
+    }
+    assert {item["check"] for item in advanced["risk_safety"]["exchange_health"]} >= {  # type: ignore[index]
+        "market_data_source",
+        "order_book",
+        "recent_trades",
+        "live_execution",
+    }
+    assert {item["check"] for item in advanced["risk_safety"]["reconciliation"]} >= {  # type: ignore[index]
+        "transaction_count",
+        "paper_fill_audit",
+        "cash_non_negative",
+        "open_order_rows",
+    }
+    assert advanced["trade_journal"]["paper_only"] is True  # type: ignore[index]
+    assert advanced["trade_journal"]["summary"]["transactions"] == "2"  # type: ignore[index]
+    assert advanced["trade_journal"]["summary"]["journal_entries"] == "0"  # type: ignore[index]
+    assert "manual_review" in advanced["trade_journal"]["supported_setup_types"]  # type: ignore[index]
+    assert advanced["trade_journal"]["pnl_by_strategy"][0]["strategy"]  # type: ignore[index]
+    assert advanced["trade_journal"]["pnl_by_regime"][0]["regime"]  # type: ignore[index]
+    assert advanced["trader_feedback"]["summary"]["total"] == "0"  # type: ignore[index]
+    assert "order_ticket" in advanced["trader_feedback"]["supported_categories"]  # type: ignore[index]
+    assert advanced["open_paper_orders"] == []  # type: ignore[index]
+    assert advanced["position"]["has_open_position"] is True  # type: ignore[index]
+    assert advanced["position"]["open_btc"] == "0.02"  # type: ignore[index]
+    assert advanced["position"]["close_quantity"] == "0.02"  # type: ignore[index]
+    assert advanced["position"]["reduce_quantity"] == "0.01"  # type: ignore[index]
+    assert advanced["position"]["can_stage_close"] is True  # type: ignore[index]
+    assert advanced["position"]["live_order_capability"] is False  # type: ignore[index]
     assert state["live_trading_enabled"] is False
 
 
@@ -100,8 +190,35 @@ def test_strategy_lab_profile_routes_strategy_specific_evidence(tmp_path: Path) 
     assert strategy_lab["selected_strategy"] == "MinRiskSpotStrategyV1"  # type: ignore[index]
     assert "paper_evaluation_gate" in strategy_lab["enabled_modules"]  # type: ignore[index]
     assert "RSI" in strategy_lab["required_indicators"]  # type: ignore[index]
+    assert "confidence_engine" in strategy_lab["required_ai_context_modules"]  # type: ignore[index]
     assert strategy_lab["recommendation_actionable"] is True  # type: ignore[index]
+    assert strategy_lab["evidence_request"]["ui_profile"] == "strategy_lab"  # type: ignore[index]
+    assert strategy_lab["evidence_request"]["live_execution_requested"] is False  # type: ignore[index]
+    assert strategy_lab["routing_decision"]["scope"] == "paper_evidence_only"  # type: ignore[index]
+    assert strategy_lab["routing_decision"]["live_execution_enabled"] is False  # type: ignore[index]
+    assert strategy_lab["parameter_config"]["minimum_reward_to_risk"] == "2.0"  # type: ignore[index]
+    assert {item["evidence"] for item in strategy_lab["evidence_matrix"]} >= {  # type: ignore[index]
+        "market_data",
+        "indicator_features",
+        "risk_decision",
+        "order_book_depth",
+        "recent_public_trades",
+        "backtest_metrics",
+    }
+    assert all(
+        item["status"] == "available"
+        for item in strategy_lab["evidence_matrix"]
+        if item["required"]
+    )  # type: ignore[index]
+    assert {item["module"] for item in strategy_lab["module_routing"]} >= {  # type: ignore[index]
+        "strategy_profile_registry",
+        "paper_trading_engine",
+        "risk_engine",
+        "paper_evaluation_gate",
+    }
     assert strategy_lab["compare_runs"][0]["run_id"] == "current_paper"  # type: ignore[index]
+    assert "sample_size" in strategy_lab["compare_runs"][0]  # type: ignore[index]
+    assert strategy_lab["compare_runs"][1]["parameter_profile"] == "defensive"  # type: ignore[index]
     assert state["live_trading_enabled"] is False
 
 
@@ -125,8 +242,228 @@ def test_strategy_lab_selection_can_be_saved_without_live_permissions(tmp_path: 
     assert updated_lab["selection"]["timeframe"] == "4h"  # type: ignore[index]
     assert updated_lab["selection"]["run_mode"] == "backtest"  # type: ignore[index]
     assert updated_lab["recommendation_actionable"] is False  # type: ignore[index]
+    assert updated_lab["compare_runs"][1]["selected"] is True  # type: ignore[index]
+    assert updated_lab["parameter_config"]["minimum_reward_to_risk"] == "2.5"  # type: ignore[index]
     assert restored_lab["selection"]["parameter_profile"] == "defensive"  # type: ignore[index]
     assert restored["live_trading_enabled"] is False
+
+
+def test_watchlist_symbol_selection_is_read_only_and_persistent(tmp_path: Path) -> None:
+    state_path = tmp_path / "paper_dashboard_state.json"
+    controller = build_default_paper_dashboard_controller(state_path=str(state_path))
+
+    updated = controller.set_watchlist_symbol("ETH/USDT")
+    restored = build_default_paper_dashboard_controller(state_path=str(state_path)).state(
+        ui_mode=DashboardUIMode.ADVANCED_TRADER
+    )
+
+    advanced = updated["views"]["advanced_trader"]  # type: ignore[index]
+    restored_advanced = restored["views"]["advanced_trader"]  # type: ignore[index]
+    assert updated["market"]["symbol"] == "ETH/USDT"  # type: ignore[index]
+    assert updated["market"]["paper_strategy_symbol"] == "BTC/USDT"  # type: ignore[index]
+    assert updated["market"]["paper_tradable"] is False  # type: ignore[index]
+    assert advanced["watchlist"]["selected_symbol"] == "ETH/USDT"  # type: ignore[index]
+    assert advanced["watchlist"]["can_paper_trade_selected"] is False  # type: ignore[index]
+    assert restored_advanced["watchlist"]["selected_symbol"] == "ETH/USDT"  # type: ignore[index]
+    assert restored["live_trading_enabled"] is False
+
+
+def test_local_alert_rules_trigger_and_restore(tmp_path: Path) -> None:
+    state_path = tmp_path / "paper_dashboard_state.json"
+    controller = build_default_paper_dashboard_controller(state_path=str(state_path))
+
+    price_alert = controller.add_alert_rule(
+        alert_type="price_above",
+        symbol="BTC/USDT",
+        threshold="103",
+    )
+    recommendation_alert = controller.add_alert_rule(
+        alert_type="recommendation",
+        symbol="BTC/USDT",
+        expected_value="BUY",
+    )
+    restored = build_default_paper_dashboard_controller(state_path=str(state_path)).state(
+        ui_mode=DashboardUIMode.ADVANCED_TRADER
+    )
+
+    triggered = price_alert["views"]["advanced_trader"]["alerts"]["triggered"]  # type: ignore[index]
+    rec_triggered = recommendation_alert["views"]["advanced_trader"]["alerts"]["triggered"]  # type: ignore[index]
+    restored_rules = restored["views"]["advanced_trader"]["alert_rules"]  # type: ignore[index]
+    assert triggered[0]["alert_type"] == "price_above"  # type: ignore[index]
+    assert any(item["alert_type"] == "recommendation" for item in rec_triggered)  # type: ignore[index]
+    assert len(restored_rules) == 2
+    assert restored["live_trading_enabled"] is False
+
+
+def test_local_alert_rule_can_be_deleted() -> None:
+    controller = build_default_paper_dashboard_controller()
+    state = controller.add_alert_rule(
+        alert_type="price_below",
+        symbol="BTC/USDT",
+        threshold="105",
+    )
+    rule = state["views"]["advanced_trader"]["alert_rules"][0]  # type: ignore[index]
+
+    updated = controller.delete_alert_rule(alert_id=str(rule["alert_id"]))  # type: ignore[index]
+
+    assert updated["views"]["advanced_trader"]["alert_rules"] == []  # type: ignore[index]
+    assert updated["logs"][0]["event_type"] == "delete_alert_rule"  # type: ignore[index]
+    assert updated["live_trading_enabled"] is False
+
+
+def test_advanced_alert_types_trigger_for_dashboard_evidence() -> None:
+    controller = build_default_paper_dashboard_controller()
+    controller.watchlist = (
+        paper_app.DashboardWatchlistItem(
+            symbol="BTC/USDT",
+            price=Decimal("104"),
+            source="fixture",
+            updated_at=paper_app.DEFAULT_NOW,
+            data_health="degraded",
+            paper_tradable=True,
+            note="fixture degraded data",
+        ),
+    )
+
+    controller.add_alert_rule(
+        alert_type="indicator_confidence",
+        symbol="BTC/USDT",
+        threshold="0.50",
+    )
+    controller.add_alert_rule(
+        alert_type="drawdown_above",
+        symbol="BTC/USDT",
+        threshold="0",
+    )
+    controller.add_alert_rule(alert_type="stale_data", symbol="BTC/USDT")
+    controller.add_alert_rule(
+        alert_type="paper_order_event",
+        symbol="BTC/USDT",
+        expected_value="submit_paper_order_ticket",
+    )
+    state = controller.submit_paper_order_ticket(
+        order_type="limit",
+        side="buy",
+        quantity="0.01",
+        limit_price="101",
+    )
+
+    triggered = state["views"]["advanced_trader"]["alerts"]["triggered"]  # type: ignore[index]
+    triggered_types = {item["alert_type"] for item in triggered}  # type: ignore[index]
+    assert {
+        "indicator_confidence",
+        "drawdown_above",
+        "stale_data",
+        "paper_order_event",
+    }.issubset(triggered_types)
+    assert state["views"]["advanced_trader"]["alerts"]["notification_scope"] == (  # type: ignore[index]
+        "local_dashboard_only"
+    )
+    assert state["live_trading_enabled"] is False
+
+
+def test_trade_journal_entries_update_analytics_and_restore(tmp_path: Path) -> None:
+    state_path = tmp_path / "paper_dashboard_state.json"
+    controller = build_default_paper_dashboard_controller(state_path=str(state_path))
+    transaction = controller.state()["transactions"][0]  # type: ignore[index]
+
+    updated = controller.save_journal_entry(
+        trade_ref=str(transaction["trade_ref"]),  # type: ignore[index]
+        symbol="BTC/USDT",
+        setup_type="pullback",
+        tags="patience, good entry",
+        notes="Waited for confirmation.",
+        mistake_review="No execution mistake.",
+        lesson="Keep the confirmation checklist visible.",
+        chart_context="BTC/USDT 1h close above SMA",
+    )
+    restored = build_default_paper_dashboard_controller(state_path=str(state_path)).state()
+
+    journal = updated["views"]["advanced_trader"]["trade_journal"]  # type: ignore[index]
+    restored_journal = restored["views"]["advanced_trader"]["trade_journal"]  # type: ignore[index]
+    assert journal["summary"]["journal_entries"] == "1"  # type: ignore[index]
+    assert journal["summary"]["mistakes_logged"] == "1"  # type: ignore[index]
+    assert journal["tag_breakdown"][0]["tag"] == "good_entry"  # type: ignore[index]
+    assert journal["entries"][0]["setup_type"] == "pullback"  # type: ignore[index]
+    assert journal["entries"][0]["paper_only"] is True  # type: ignore[index]
+    assert restored_journal["summary"]["journal_entries"] == "1"  # type: ignore[index]
+    assert restored_journal["entries"][0]["notes"] == "Waited for confirmation."  # type: ignore[index]
+    assert restored["live_trading_enabled"] is False
+
+
+def test_trade_journal_entry_can_be_deleted() -> None:
+    controller = build_default_paper_dashboard_controller()
+    updated = controller.save_journal_entry(
+        symbol="BTC/USDT",
+        setup_type="manual_review",
+        tags="review",
+        notes="Quick note.",
+    )
+    entry = updated["views"]["advanced_trader"]["trade_journal"]["entries"][0]  # type: ignore[index]
+
+    deleted = controller.delete_journal_entry(journal_id=str(entry["journal_id"]))  # type: ignore[index]
+
+    journal = deleted["views"]["advanced_trader"]["trade_journal"]  # type: ignore[index]
+    assert journal["entries"] == []  # type: ignore[index]
+    assert journal["summary"]["journal_entries"] == "0"  # type: ignore[index]
+    assert deleted["logs"][0]["event_type"] == "delete_journal_entry"  # type: ignore[index]
+
+
+def test_trader_feedback_updates_summary_closes_and_restores(tmp_path: Path) -> None:
+    state_path = tmp_path / "paper_dashboard_state.json"
+    controller = build_default_paper_dashboard_controller(state_path=str(state_path))
+
+    updated = controller.save_trader_feedback(
+        reviewer_role="trader",
+        category="order_ticket",
+        severity="high",
+        summary="Make paper-only status impossible to miss.",
+        recommendation="Repeat paper-only wording inside the submit area.",
+    )
+    feedback = updated["views"]["advanced_trader"]["trader_feedback"]  # type: ignore[index]
+    feedback_id = feedback["items"][0]["feedback_id"]  # type: ignore[index]
+    closed = controller.close_trader_feedback(
+        feedback_id=str(feedback_id),
+        resolution="Added stronger paper-only copy near submit.",
+    )
+    restored = build_default_paper_dashboard_controller(state_path=str(state_path)).state()
+
+    assert feedback["summary"]["total"] == "1"  # type: ignore[index]
+    assert feedback["summary"]["open"] == "1"  # type: ignore[index]
+    assert feedback["items"][0]["category"] == "order_ticket"  # type: ignore[index]
+    assert closed["views"]["advanced_trader"]["trader_feedback"]["summary"]["closed"] == "1"  # type: ignore[index]
+    assert restored["views"]["advanced_trader"]["trader_feedback"]["items"][0]["status"] == "closed"  # type: ignore[index]
+    assert restored["views"]["advanced_trader"]["trader_feedback"]["items"][0]["resolution"]  # type: ignore[index]
+    assert restored["logs"][0]["event_type"] == "paper_state_restored"  # type: ignore[index]
+    assert restored["live_trading_enabled"] is False
+
+
+def test_chart_drawings_save_delete_and_restore(tmp_path: Path) -> None:
+    state_path = tmp_path / "paper_dashboard_state.json"
+    controller = build_default_paper_dashboard_controller(state_path=str(state_path))
+    chart = controller.state()["views"]["advanced_trader"]["chart"]  # type: ignore[index]
+    candles = chart["candles"]  # type: ignore[index]
+
+    updated = controller.save_chart_drawing(
+        drawing_type="trendline",
+        symbol="BTC/USDT",
+        timeframe="1h",
+        start_time=str(candles[0]["time"]),  # type: ignore[index]
+        end_time=str(candles[-1]["time"]),  # type: ignore[index]
+        start_price="101",
+        end_price="104",
+        text="trend support",
+        color="#0f7b52",
+    )
+    drawing = updated["views"]["advanced_trader"]["chart"]["drawings"][0]  # type: ignore[index]
+    restored = build_default_paper_dashboard_controller(state_path=str(state_path)).state()
+
+    assert drawing["drawing_type"] == "trendline"  # type: ignore[index]
+    assert drawing["paper_only"] is True  # type: ignore[index]
+    assert restored["views"]["advanced_trader"]["chart"]["drawings"][0]["text"] == "trend support"  # type: ignore[index]
+    deleted = controller.delete_chart_drawing(drawing_id=str(drawing["drawing_id"]))  # type: ignore[index]
+    assert deleted["views"]["advanced_trader"]["chart"]["drawings"] == []  # type: ignore[index]
+    assert deleted["logs"][0]["event_type"] == "delete_chart_drawing"  # type: ignore[index]
 
 
 def test_local_dashboard_can_use_binance_market_data(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -251,6 +588,101 @@ def test_approve_button_records_paper_only_operator_approval() -> None:
     assert updated["live_trading_enabled"] is False
 
 
+def test_advanced_paper_order_ticket_stages_and_cancels_without_changing_cash() -> None:
+    controller = build_default_paper_dashboard_controller()
+    before = controller.state()
+
+    staged = controller.submit_paper_order_ticket(
+        order_type="limit",
+        side="buy",
+        quantity="0.02",
+        limit_price="101.50",
+        reason="fixture staged limit",
+    )
+    advanced = staged["views"]["advanced_trader"]  # type: ignore[index]
+    open_order = advanced["open_paper_orders"][0]  # type: ignore[index]
+    canceled = controller.cancel_paper_order(
+        order_id=str(open_order["order_id"]),  # type: ignore[index]
+        reason="fixture cancel",
+    )
+
+    assert staged["portfolio"]["cash"] == before["portfolio"]["cash"]  # type: ignore[index]
+    assert open_order["order_type"] == "limit"  # type: ignore[index]
+    assert open_order["side"] == "buy"  # type: ignore[index]
+    assert open_order["quantity"] == "0.02"  # type: ignore[index]
+    assert open_order["limit_price"] == "101.50"  # type: ignore[index]
+    assert open_order["paper_only"] is True  # type: ignore[index]
+    assert staged["logs"][0]["event_type"] == "submit_paper_order_ticket"  # type: ignore[index]
+    assert canceled["views"]["advanced_trader"]["open_paper_orders"] == []  # type: ignore[index]
+    assert canceled["portfolio"]["cash"] == before["portfolio"]["cash"]  # type: ignore[index]
+    assert canceled["logs"][0]["event_type"] == "cancel_paper_order"  # type: ignore[index]
+    assert canceled["live_trading_enabled"] is False
+
+
+def test_paper_order_ticket_validates_required_prices() -> None:
+    controller = build_default_paper_dashboard_controller()
+
+    with pytest.raises(PaperDashboardActionError, match="limit paper order requires limit price"):
+        controller.submit_paper_order_ticket(
+            order_type="limit",
+            side="buy",
+            quantity="0.01",
+        )
+    with pytest.raises(PaperDashboardActionError, match="OCO paper order requires"):
+        controller.submit_paper_order_ticket(
+            order_type="oco",
+            side="sell",
+            quantity="0.01",
+            stop_price="100",
+        )
+
+
+def test_paper_order_ticket_validates_binance_style_filters() -> None:
+    controller = build_default_paper_dashboard_controller()
+
+    with pytest.raises(PaperDashboardActionError, match="step_size"):
+        controller.submit_paper_order_ticket(
+            order_type="limit",
+            side="buy",
+            quantity="0.01005",
+            limit_price="101.50",
+        )
+    with pytest.raises(PaperDashboardActionError, match="tick_size"):
+        controller.submit_paper_order_ticket(
+            order_type="limit",
+            side="buy",
+            quantity="0.02",
+            limit_price="101.505",
+        )
+    with pytest.raises(PaperDashboardActionError, match="min_notional"):
+        controller.submit_paper_order_ticket(
+            order_type="market",
+            side="buy",
+            quantity="0.001",
+        )
+
+
+def test_position_panel_stages_close_and_reduce_as_paper_sell_orders() -> None:
+    controller = build_default_paper_dashboard_controller()
+    before = controller.state()
+
+    close_state = controller.stage_close_position(reason="fixture close review")
+    close_order = close_state["views"]["advanced_trader"]["open_paper_orders"][0]  # type: ignore[index]
+    reduce_state = controller.stage_reduce_position(reason="fixture reduce review")
+    reduce_order = reduce_state["views"]["advanced_trader"]["open_paper_orders"][0]  # type: ignore[index]
+
+    assert close_order["order_type"] == "market"  # type: ignore[index]
+    assert close_order["side"] == "sell"  # type: ignore[index]
+    assert close_order["quantity"] == "0.02"  # type: ignore[index]
+    assert reduce_order["order_type"] == "market"  # type: ignore[index]
+    assert reduce_order["side"] == "sell"  # type: ignore[index]
+    assert reduce_order["quantity"] == "0.01"  # type: ignore[index]
+    assert reduce_state["portfolio"]["cash"] == before["portfolio"]["cash"]  # type: ignore[index]
+    assert reduce_state["portfolio"]["open_btc"] == before["portfolio"]["open_btc"]  # type: ignore[index]
+    assert reduce_state["logs"][0]["event_type"] == "submit_paper_order_ticket"  # type: ignore[index]
+    assert reduce_state["live_trading_enabled"] is False
+
+
 def test_approved_paper_wallet_can_be_restored(tmp_path: Path) -> None:
     state_path = tmp_path / "paper_dashboard_state.json"
     controller = build_default_paper_dashboard_controller(state_path=str(state_path))
@@ -267,6 +699,27 @@ def test_approved_paper_wallet_can_be_restored(tmp_path: Path) -> None:
     assert restored["portfolio"]["open_btc"] == updated["portfolio"]["open_btc"]  # type: ignore[index]
     assert restored["transactions"] == updated["transactions"]
     assert restored["logs"][0]["event_type"] == "paper_state_restored"  # type: ignore[index]
+
+
+def test_staged_paper_orders_can_be_restored(tmp_path: Path) -> None:
+    state_path = tmp_path / "paper_dashboard_state.json"
+    controller = build_default_paper_dashboard_controller(state_path=str(state_path))
+
+    staged = controller.submit_paper_order_ticket(
+        order_type="oco",
+        side="sell",
+        quantity="0.02",
+        stop_price="99",
+        take_profit_price="110",
+        reason="fixture staged oco",
+    )
+    restored = build_default_paper_dashboard_controller(state_path=str(state_path)).state()
+
+    staged_orders = staged["views"]["advanced_trader"]["open_paper_orders"]  # type: ignore[index]
+    restored_orders = restored["views"]["advanced_trader"]["open_paper_orders"]  # type: ignore[index]
+    assert restored_orders == staged_orders
+    assert restored_orders[0]["order_type"] == "oco"  # type: ignore[index]
+    assert restored["live_trading_enabled"] is False
 
 
 def test_approved_paper_wallet_can_be_restored_from_sqlite(tmp_path: Path) -> None:
@@ -310,6 +763,7 @@ def test_trader_readiness_gate_checks_views_routes_and_trade_evidence(tmp_path: 
     checklist_ids = {item["id"] for item in checklist}  # type: ignore[index]
     routes = readiness["routes"]  # type: ignore[index]
     reconstructability = readiness["trade_reconstructability"]  # type: ignore[index]
+    verdict = readiness["trader_verdict"]  # type: ignore[index]
 
     assert readiness["ready"] is True  # type: ignore[index]
     assert readiness["live_trading_enabled"] is False  # type: ignore[index]
@@ -326,6 +780,22 @@ def test_trader_readiness_gate_checks_views_routes_and_trade_evidence(tmp_path: 
     assert all(route["paper_safe"] is True for route in routes)  # type: ignore[index]
     assert all(route["live_order_capability"] is False for route in routes)  # type: ignore[index]
     assert "POST /api/approve-paper-trade" in {route["route"] for route in routes}  # type: ignore[index]
+    assert "POST /api/paper-order-ticket" in {route["route"] for route in routes}  # type: ignore[index]
+    assert "POST /api/cancel-paper-order" in {route["route"] for route in routes}  # type: ignore[index]
+    assert "POST /api/stage-close-position" in {route["route"] for route in routes}  # type: ignore[index]
+    assert "POST /api/stage-reduce-position" in {route["route"] for route in routes}  # type: ignore[index]
+    assert "POST /api/watchlist-symbol" in {route["route"] for route in routes}  # type: ignore[index]
+    assert "POST /api/alert-rule" in {route["route"] for route in routes}  # type: ignore[index]
+    assert "POST /api/delete-alert-rule" in {route["route"] for route in routes}  # type: ignore[index]
+    assert "POST /api/journal-entry" in {route["route"] for route in routes}  # type: ignore[index]
+    assert "POST /api/delete-journal-entry" in {route["route"] for route in routes}  # type: ignore[index]
+    assert "POST /api/trader-feedback" in {route["route"] for route in routes}  # type: ignore[index]
+    assert "POST /api/close-trader-feedback" in {route["route"] for route in routes}  # type: ignore[index]
+    assert "POST /api/chart-drawing" in {route["route"] for route in routes}  # type: ignore[index]
+    assert "POST /api/delete-chart-drawing" in {route["route"] for route in routes}  # type: ignore[index]
+    assert "GET /trader-handoff.md" in {route["route"] for route in routes}  # type: ignore[index]
+    assert "GET /trader-evidence.json" in {route["route"] for route in routes}  # type: ignore[index]
+    assert "GET /trader-feedback.csv" in {route["route"] for route in routes}  # type: ignore[index]
     assert reconstructability["reconstructable"] is True  # type: ignore[index]
     assert {
         "market_data",
@@ -336,7 +806,55 @@ def test_trader_readiness_gate_checks_views_routes_and_trade_evidence(tmp_path: 
         "account_update",
         "operator_or_audit_action",
     } == {item["id"] for item in reconstructability["checks"]}  # type: ignore[index]
+    assert verdict["paper_demo_ready"] is True
+    assert verdict["live_capital_ready"] is False
+    assert verdict["profitability_claim"] == "none"
+    assert verdict["shareable_scope"] == "paper-mode trader review only"
+    assert verdict["blockers"] == []
+    assert "Strategy Lab exposes required evidence" in " ".join(verdict["proof_points"])
+    assert "does not prove profitability" in " ".join(verdict["warnings"])
     assert state["live_trading_enabled"] is False
+
+
+def test_open_blocker_trader_feedback_blocks_paper_demo_readiness(tmp_path: Path) -> None:
+    db_path = tmp_path / "paper_dashboard.sqlite"
+    controller = build_default_paper_dashboard_controller(db_path=str(db_path))
+
+    blocked = controller.save_trader_feedback(
+        reviewer_role="trader",
+        category="risk",
+        severity="blocker",
+        summary="Risk panel needs clearer halt wording.",
+        recommendation="Clarify halt state before sharing the demo.",
+    )
+    feedback_id = blocked["views"]["advanced_trader"]["trader_feedback"]["items"][0][  # type: ignore[index]
+        "feedback_id"
+    ]
+    with pytest.raises(PaperDashboardActionError, match="requires a resolution note"):
+        controller.close_trader_feedback(feedback_id=str(feedback_id))
+
+    closed = controller.close_trader_feedback(
+        feedback_id=str(feedback_id),
+        resolution="Updated halt wording in the risk panel.",
+    )
+
+    blocked_readiness = blocked["readiness"]  # type: ignore[assignment]
+    blocked_verdict = blocked_readiness["trader_verdict"]  # type: ignore[index]
+    closed_readiness = closed["readiness"]  # type: ignore[assignment]
+    closed_verdict = closed_readiness["trader_verdict"]  # type: ignore[index]
+
+    assert blocked_readiness["ready"] is False  # type: ignore[index]
+    assert blocked_verdict["paper_demo_ready"] is False
+    assert blocked_verdict["shareable_scope"] == "internal testing until blockers are fixed"
+    assert "Open trader feedback blocker" in " ".join(blocked_verdict["blockers"])
+    assert "open_trader_feedback_blockers" in {
+        item["id"]
+        for item in blocked_readiness["checklist"]  # type: ignore[index]
+    }
+    assert closed_readiness["ready"] is True  # type: ignore[index]
+    assert closed_verdict["paper_demo_ready"] is True
+    assert closed_verdict["blockers"] == []
+    assert closed["live_trading_enabled"] is False
 
 
 def test_risk_rejected_recommendation_cannot_be_approved() -> None:
@@ -380,6 +898,8 @@ def test_http_adapter_serves_ui_status_report_and_safe_actions() -> None:
     page = handle_dashboard_request("GET", "/", b"", controller)
     status = handle_dashboard_request("GET", "/api/status", b"", controller)
     report = handle_dashboard_request("GET", "/paper-report", b"", controller)
+    handoff = handle_dashboard_request("GET", "/trader-handoff.md", b"", controller)
+    evidence = handle_dashboard_request("GET", "/trader-evidence.json", b"", controller)
     approve = handle_dashboard_request(
         "POST",
         "/api/approve-paper-trade",
@@ -393,11 +913,72 @@ def test_http_adapter_serves_ui_status_report_and_safe_actions() -> None:
         controller,
     )
     csv = handle_dashboard_request("GET", "/paper-transactions.csv", b"", controller)
+    feedback_csv_before = handle_dashboard_request("GET", "/trader-feedback.csv", b"", controller)
     strategy_lab = handle_dashboard_request(
         "POST",
         "/api/strategy-lab-selection",
         b'{"strategy":"min_risk_spot_v1","symbol":"BTC/USDT","timeframe":"4h",'
         b'"run_mode":"backtest","parameter_profile":"defensive"}',
+        controller,
+    )
+    watchlist_symbol = handle_dashboard_request(
+        "POST",
+        "/api/watchlist-symbol",
+        b'{"symbol":"SOL/USDT"}',
+        controller,
+    )
+    alert_rule = handle_dashboard_request(
+        "POST",
+        "/api/alert-rule",
+        b'{"alert_type":"price_above","symbol":"BTC/USDT","threshold":"103"}',
+        controller,
+    )
+    journal_entry = handle_dashboard_request(
+        "POST",
+        "/api/journal-entry",
+        b'{"symbol":"BTC/USDT","setup_type":"pullback","tags":"review","notes":"fixture journal"}',
+        controller,
+    )
+    trader_feedback = handle_dashboard_request(
+        "POST",
+        "/api/trader-feedback",
+        b'{"reviewer_role":"trader","category":"order_ticket","severity":"high",'
+        b'"summary":"paper ticket needs clearer label","recommendation":"repeat paper-only"}',
+        controller,
+    )
+    feedback_state = json.loads(trader_feedback.body)
+    feedback_id = feedback_state["views"]["advanced_trader"]["trader_feedback"]["items"][0][
+        "feedback_id"
+    ]
+    close_feedback = handle_dashboard_request(
+        "POST",
+        "/api/close-trader-feedback",
+        json.dumps(
+            {
+                "feedback_id": feedback_id,
+                "resolution": "Added paper-only submit copy.",
+            }
+        ).encode("utf-8"),
+        controller,
+    )
+    feedback_csv_after = handle_dashboard_request("GET", "/trader-feedback.csv", b"", controller)
+    chart_drawing = handle_dashboard_request(
+        "POST",
+        "/api/chart-drawing",
+        b'{"drawing_type":"horizontal_level","symbol":"BTC/USDT","timeframe":"1h",'
+        b'"start_price":"104","text":"fixture level","color":"#1264a3"}',
+        controller,
+    )
+    paper_order = handle_dashboard_request(
+        "POST",
+        "/api/paper-order-ticket",
+        b'{"order_type":"limit","side":"buy","quantity":"0.01","limit_price":"101"}',
+        controller,
+    )
+    close_position = handle_dashboard_request(
+        "POST",
+        "/api/stage-close-position",
+        b'{"reason":"fixture close"}',
         controller,
     )
 
@@ -409,12 +990,66 @@ def test_http_adapter_serves_ui_status_report_and_safe_actions() -> None:
     assert "Glossary" in page.body
     assert "beginner_command_label" in page.body
     assert "price_chart" in page.body
+    assert "chart_timeframes" in page.body
+    assert "chart_indicators" in page.body
+    assert "chart_tooltip" in page.body
+    assert "chart_readout" in page.body
+    assert 'data-chart-overlay="sma_3"' in page.body
+    assert "updateChartTooltip" in page.body
+    assert "aggregateCandles" in page.body
+    assert "drawing_type" in page.body
+    assert "saveChartDrawing" in page.body
+    assert "deleteChartDrawing" in page.body
+    assert "Order Book / Market Depth" in page.body
+    assert "order_book" in page.body
+    assert "renderOrderBook" in page.body
+    assert "depth-price-bid" in page.body
+    assert "Order Flow / Recent Trades" in page.body
+    assert "order_flow" in page.body
+    assert "renderOrderFlow" in page.body
+    assert "renderLiquidityHeatmap" in page.body
+    assert "Paper Order Ticket" in page.body
+    assert "Open Paper Orders" in page.body
+    assert "ticket_order_type" in page.body
+    assert "ticket_filters" in page.body
+    assert "submitPaperOrderTicket" in page.body
+    assert "cancelPaperOrder" in page.body
+    assert "Paper Position" in page.body
+    assert "stage_close_position" in page.body
+    assert "stage_reduce_position" in page.body
+    assert "Watchlist" in page.body
+    assert "watchlist" in page.body
+    assert "saveWatchlistSymbol" in page.body
+    assert "Alerts" in page.body
+    assert "alert_type" in page.body
+    assert "addAlertRule" in page.body
+    assert "deleteAlertRule" in page.body
+    assert "Risk &amp; Safety" in page.body or "Risk & Safety" in page.body
+    assert "risk_safety_summary" in page.body
+    assert "renderRiskSafety" in page.body
+    assert "Trade Journal Analytics" in page.body
+    assert "journal_setup_type" in page.body
+    assert "saveJournalEntry" in page.body
+    assert "deleteJournalEntry" in page.body
+    assert "Trader Feedback" in page.body
+    assert "saveTraderFeedback" in page.body
+    assert "closeTraderFeedback" in page.body
     assert "Backtest Summary" in page.body
     assert "Transactions CSV" in page.body
+    assert "Feedback CSV" in page.body
+    assert "Trader Handoff" in page.body
+    assert "Evidence JSON" in page.body
     assert "lab_strategy" in page.body
     assert "Required Evidence" in page.body
+    assert "Evidence Matrix" in page.body
+    assert "Module Routing" in page.body
+    assert "Parameter Config" in page.body
     assert "Compare Runs" in page.body
     assert "Readiness Gate" in page.body
+    assert "paper demo ready" in page.body
+    assert "live capital ready" in page.body
+    assert "Proof Points" in page.body
+    assert "profitability claim" in page.body
     assert status.status == HTTPStatus.OK
     assert '"mode": "PAPER MODE"' in status.body
     assert '"views": {' in status.body
@@ -426,6 +1061,28 @@ def test_http_adapter_serves_ui_status_report_and_safe_actions() -> None:
     assert report.status == HTTPStatus.OK
     assert "Generated from current local dashboard state" in report.body
     assert "deterministic sandbox fixture" not in report.body
+    assert "## Trader Readiness Verdict" in report.body
+    assert "Paper demo ready" in report.body
+    assert "Live capital ready" in report.body
+    assert "Profitability claim" in report.body
+    assert "internal testing until blockers are fixed" in report.body
+    assert handoff.status == HTTPStatus.OK
+    assert handoff.content_type == "text/markdown; charset=utf-8"
+    assert "# ABTP Trader Review Handoff" in handoff.body
+    assert "paper-mode trader review only" in handoff.body
+    assert "Suggested Trader Questions" in handoff.body
+    assert "Live capital ready" in handoff.body
+    assert evidence.status == HTTPStatus.OK
+    assert evidence.content_type == "application/json; charset=utf-8"
+    evidence_payload = json.loads(evidence.body)
+    assert evidence_payload["export_kind"] == "trader_evidence_bundle"
+    assert evidence_payload["live_trading_enabled"] is False
+    assert evidence_payload["readiness"]["trader_verdict"]["live_capital_ready"] is False
+    assert "order_book_summary" in evidence_payload["advanced_evidence"]
+    assert "trader_feedback_summary" in evidence_payload["advanced_evidence"]
+    assert "trader_feedback_items" in evidence_payload["advanced_evidence"]
+    assert "evidence_matrix" in evidence_payload["strategy_lab_evidence"]
+    assert evidence_payload["strategy_lab_evidence"]["selected_strategy"] == "MinRiskSpotStrategyV1"
     assert approve.status == HTTPStatus.OK
     assert "approve_paper_trade" in approve.body
     transaction_report = handle_dashboard_request("GET", "/paper-report", b"", controller)
@@ -437,6 +1094,37 @@ def test_http_adapter_serves_ui_status_report_and_safe_actions() -> None:
     assert strategy_lab.status == HTTPStatus.OK
     assert '"run_mode": "backtest"' in strategy_lab.body
     assert '"live_trading_enabled": false' in strategy_lab.body
+    assert watchlist_symbol.status == HTTPStatus.OK
+    assert '"symbol": "SOL/USDT"' in watchlist_symbol.body
+    assert '"paper_strategy_symbol": "BTC/USDT"' in watchlist_symbol.body
+    assert alert_rule.status == HTTPStatus.OK
+    assert "price_above" in alert_rule.body
+    assert "local_dashboard_only" in alert_rule.body
+    assert journal_entry.status == HTTPStatus.OK
+    assert "trade_journal" in journal_entry.body
+    assert "fixture journal" in journal_entry.body
+    assert trader_feedback.status == HTTPStatus.OK
+    assert "paper ticket needs clearer label" in trader_feedback.body
+    assert close_feedback.status == HTTPStatus.OK
+    assert '"status": "closed"' in close_feedback.body
+    assert feedback_csv_before.status == HTTPStatus.OK
+    assert feedback_csv_before.body.startswith(
+        "feedback_id,created_at,resolved_at,reviewer_role,category,severity,status,"
+        "summary,recommendation,resolution"
+    )
+    assert feedback_csv_after.status == HTTPStatus.OK
+    assert "paper ticket needs clearer label" in feedback_csv_after.body
+    assert "repeat paper-only" in feedback_csv_after.body
+    assert "Added paper-only submit copy." in feedback_csv_after.body
+    assert chart_drawing.status == HTTPStatus.OK
+    assert "fixture level" in chart_drawing.body
+    assert "chart_drawings" in chart_drawing.body
+    assert paper_order.status == HTTPStatus.OK
+    assert "submit_paper_order_ticket" in paper_order.body
+    assert '"open_paper_orders": [' in paper_order.body
+    assert close_position.status == HTTPStatus.OK
+    assert '"side": "sell"' in close_position.body
+    assert '"order_type": "market"' in close_position.body
 
 
 def test_http_adapter_saves_adaptive_ui_mode_without_live_trading() -> None:

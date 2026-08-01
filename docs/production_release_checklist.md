@@ -5,18 +5,18 @@ for unsupervised live trading.
 
 ## Verification
 
-- [ ] Fresh environment installs with `python -m pip install -e ".[dev]"`.
-- [ ] `.\.venv\Scripts\python.exe -m pytest` passes.
-- [ ] `.\.venv\Scripts\python.exe -m ruff format --check .` passes.
-- [ ] `.\.venv\Scripts\python.exe -m ruff check .` passes.
-- [ ] `.\.venv\Scripts\python.exe -m mypy src` passes.
-- [ ] Database migrations recreate the schema from scratch.
-- [ ] Backup and restore drill preserves audit reconstruction.
-- [ ] `docs/source_material/ABTP_Sequential_Codex_Execution_Plan.md` Final
+- [x] Fresh environment installs with `python -m pip install -e ".[dev]"`.
+- [x] `.\.venv\Scripts\python.exe -m pytest` passes.
+- [x] `.\.venv\Scripts\python.exe -m ruff format --check .` passes.
+- [x] `.\.venv\Scripts\python.exe -m ruff check .` passes.
+- [x] `.\.venv\Scripts\python.exe -m mypy src` passes.
+- [x] Database migrations recreate the schema from scratch.
+- [x] Backup and restore drill preserves audit reconstruction.
+- [x] `docs/source_material/ABTP_Sequential_Codex_Execution_Plan.md` Final
       Readiness Gate references all implemented stages through Stage 073.
-- [ ] Paper runner sessions produce deterministic executed, skipped,
+- [x] Paper runner sessions produce deterministic executed, skipped,
       no-signal, risk-rejected, audit, and metrics evidence.
-- [ ] Paper evaluation gate reports remain paper, make more conservative,
+- [x] Paper evaluation gate reports remain paper, make more conservative,
       pause for review, or future tiny-live proposal eligibility without
       enabling live trading.
 
@@ -34,6 +34,17 @@ for unsupervised live trading.
       and JSON fallback/export compatibility.
 - [x] Stage F Trader Readiness Gate implemented at `/api/readiness` and in the
       dashboard UI.
+- [x] Trader review handoff implemented at `/trader-handoff.md` and documented
+      in `docs/trader_review_handoff.md`.
+- [x] Trader evidence bundle implemented at `/trader-evidence.json` for
+      machine-readable readiness and audit review.
+- [x] Trader Feedback panel implemented for local paper-only reviewer
+      corrections with SQLite-backed evidence rows.
+- [x] Trader feedback CSV export implemented at `/trader-feedback.csv`.
+- [x] Open blocker-severity trader feedback blocks paper-demo readiness until
+      closed.
+- [x] Closing blocker-severity trader feedback requires a resolution note for
+      audit handoff.
 - [x] Adaptive UI acceptance gate passed on 2026-08-01: full `pytest`, Ruff
       format/check, and mypy over `src`.
 - [x] Generated runtime dashboard files are local artifacts and are ignored by
@@ -42,32 +53,33 @@ for unsupervised live trading.
 
 ## Minimum-Risk Gates
 
-- [ ] `SAFE_MODE=true` by default.
-- [ ] Default profile is paper or research.
-- [ ] `ABTP_ENABLE_LIVE_TRADING=false` by default.
+- [x] `SAFE_MODE=true` by default.
+- [x] Default profile is paper or research.
+- [x] `ABTP_ENABLE_LIVE_TRADING=false` by default.
 - [ ] No real exchange or external provider calls are added outside adapters.
-- [ ] No order path bypasses the Risk Management Engine.
-- [ ] Leverage, margin, futures, options, withdrawals, transfers, and admin API
+- [x] No order path bypasses the Risk Management Engine.
+- [x] Leverage, margin, futures, options, withdrawals, transfers, and admin API
       scopes remain blocked.
-- [ ] Live gateway requires explicit flags, preflight, manual approval, and a
+- [x] Live gateway requires explicit flags, preflight, manual approval, and a
       risk-approved `OrderIntent`.
 - [ ] Automation is disabled unless evidence gates pass and can be stopped
       instantly.
-- [ ] Critical alert failure blocks live-mode trading.
-- [ ] Confidence, research, governance, and institutional decision records are
+- [x] Critical alert failure blocks live-mode trading.
+- [x] Confidence, research, governance, and institutional decision records are
       advisory and cannot bypass the Risk Management Engine.
-- [ ] Paper command-center BUY REVIEW labels are paper-only and cannot create
+- [x] Paper command-center BUY REVIEW labels are paper-only and cannot create
       signals, approve risk, create orders, or enable live trading.
-- [ ] Paper runner BUY REVIEW handling remains necessary but not sufficient:
+- [x] Paper runner BUY REVIEW handling remains necessary but not sufficient:
       strategy signal, risk approval, sizing, stop-loss metadata, and safety
       flags must still pass before simulated fills.
-- [ ] Paper evaluation future tiny-live eligibility is evidence for a later
+- [x] Paper evaluation future tiny-live eligibility is evidence for a later
       supervised proposal only; it is not live approval.
 
 ## Documentation
 
 - [x] `docs/trader_ready_adaptive_ui_plan.md` reviewed for beginner,
       advanced-trader, and strategy-specific dashboard behavior.
+- [x] `docs/trader_review_handoff.md` documents paper-only trader review scope.
 - [ ] `docs/final_integration.md` reviewed.
 - [ ] `docs/user_guide.md` reviewed.
 - [ ] `docs/deployment.md` reviewed.

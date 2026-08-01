@@ -348,6 +348,84 @@ def test_paper_dashboard_repository_round_trips_ledger_payload(
                 "occurred_at": NOW.isoformat(),
             }
         ],
+        "open_paper_orders": [
+            {
+                "order_id": "paper-order-1",
+                "symbol": "BTC/USDT",
+                "order_type": "limit",
+                "side": "buy",
+                "quantity": "0.01",
+                "limit_price": "101",
+                "stop_price": "not_available",
+                "take_profit_price": "not_available",
+                "status": "open",
+                "created_at": NOW.isoformat(),
+                "reason": "fixture",
+                "paper_only": True,
+            }
+        ],
+        "alert_rules": [
+            {
+                "alert_id": "alert-1",
+                "alert_type": "price_above",
+                "symbol": "BTC/USDT",
+                "threshold": "103",
+                "expected_value": "",
+                "enabled": True,
+                "created_at": NOW.isoformat(),
+                "paper_only": True,
+            }
+        ],
+        "journal_entries": [
+            {
+                "journal_id": "journal-1",
+                "trade_ref": "00000000-0000-0000-0000-000000000001",
+                "symbol": "BTC/USDT",
+                "setup_type": "pullback",
+                "tags": ["review"],
+                "notes": "fixture note",
+                "mistake_review": "",
+                "lesson": "fixture lesson",
+                "chart_context": "fixture chart",
+                "strategy": "MinRiskSpotStrategyV1",
+                "regime": "bull",
+                "created_at": NOW.isoformat(),
+                "updated_at": NOW.isoformat(),
+                "paper_only": True,
+            }
+        ],
+        "trader_feedback": [
+            {
+                "feedback_id": "feedback-1",
+                "reviewer_role": "trader",
+                "category": "order_ticket",
+                "severity": "high",
+                "status": "open",
+                "summary": "Clarify paper-only order ticket.",
+                "recommendation": "Add stronger paper-only copy near submit.",
+                "resolution": "",
+                "created_at": NOW.isoformat(),
+                "resolved_at": "",
+                "paper_only": True,
+            }
+        ],
+        "chart_drawings": [
+            {
+                "drawing_id": "drawing-1",
+                "drawing_type": "horizontal_level",
+                "symbol": "BTC/USDT",
+                "timeframe": "1h",
+                "start_time": NOW.isoformat(),
+                "end_time": "",
+                "start_price": "104",
+                "end_price": "not_available",
+                "text": "fixture level",
+                "color": "#1264a3",
+                "enabled": True,
+                "created_at": NOW.isoformat(),
+                "paper_only": True,
+            }
+        ],
     }
 
     repo.save_state_payload(
@@ -407,6 +485,41 @@ def test_paper_dashboard_repository_round_trips_ledger_payload(
         migrated_connection.execute("SELECT COUNT(*) FROM paper_operator_actions").fetchone()[0]
         == 1
     )
+    assert migrated_connection.execute("SELECT COUNT(*) FROM paper_open_orders").fetchone()[0] == 1
+    assert migrated_connection.execute("SELECT COUNT(*) FROM paper_alert_rules").fetchone()[0] == 1
+    assert (
+        migrated_connection.execute("SELECT COUNT(*) FROM paper_journal_entries").fetchone()[0] == 1
+    )
+    assert (
+        migrated_connection.execute("SELECT COUNT(*) FROM paper_chart_drawings").fetchone()[0] == 1
+    )
+    assert (
+        migrated_connection.execute("SELECT COUNT(*) FROM paper_trader_feedback").fetchone()[0] == 1
+    )
+    assert (
+        migrated_connection.execute("SELECT order_id FROM paper_open_orders").fetchone()[0]
+        == "paper-order-1"
+    )
+    assert (
+        migrated_connection.execute("SELECT alert_type FROM paper_alert_rules").fetchone()[0]
+        == "price_above"
+    )
+    assert (
+        migrated_connection.execute("SELECT setup_type FROM paper_journal_entries").fetchone()[0]
+        == "pullback"
+    )
+    assert (
+        migrated_connection.execute("SELECT drawing_type FROM paper_chart_drawings").fetchone()[0]
+        == "horizontal_level"
+    )
+    assert (
+        migrated_connection.execute("SELECT category FROM paper_trader_feedback").fetchone()[0]
+        == "order_ticket"
+    )
+    assert (
+        migrated_connection.execute("SELECT resolution FROM paper_trader_feedback").fetchone()[0]
+        == ""
+    )
 
 
 def test_paper_ledger_tables_are_append_only(migrated_connection: Connection) -> None:
@@ -425,14 +538,57 @@ def test_paper_ledger_tables_are_append_only(migrated_connection: Connection) ->
             "equity_history": ["10000"],
         },
         "trades": [],
+        "alert_rules": [
+            {
+                "alert_id": "alert-append-only",
+                "alert_type": "risk_halt",
+                "symbol": "BTC/USDT",
+                "threshold": "",
+                "expected_value": "",
+                "enabled": True,
+                "created_at": NOW.isoformat(),
+                "paper_only": True,
+            }
+        ],
+        "trader_feedback": [
+            {
+                "feedback_id": "feedback-append-only",
+                "reviewer_role": "trader",
+                "category": "ui",
+                "severity": "low",
+                "status": "open",
+                "summary": "Fixture feedback.",
+                "recommendation": "",
+                "resolution": "",
+                "created_at": NOW.isoformat(),
+                "resolved_at": "",
+                "paper_only": True,
+            }
+        ],
     }
     repo.save_state_payload(payload)
     snapshot_id = migrated_connection.execute(
         "SELECT id FROM paper_account_snapshots LIMIT 1"
+    ).fetchone()["id"]
+    alert_row_id = migrated_connection.execute(
+        "SELECT id FROM paper_alert_rules LIMIT 1"
+    ).fetchone()["id"]
+    feedback_row_id = migrated_connection.execute(
+        "SELECT id FROM paper_trader_feedback LIMIT 1"
     ).fetchone()["id"]
 
     with pytest.raises(IntegrityError, match="append-only"):
         migrated_connection.execute(
             "UPDATE paper_account_snapshots SET cash = '1' WHERE id = ?",
             (snapshot_id,),
+        )
+    with pytest.raises(IntegrityError, match="append-only"):
+        migrated_connection.execute(
+            "UPDATE paper_alert_rules SET enabled = 'False' WHERE id = ?",
+            (alert_row_id,),
+        )
+    with pytest.raises(IntegrityError, match="append-only"):
+        migrated_connection.execute(
+            "UPDATE paper_trader_feedback SET status = 'closed' WHERE id = ?",
+            (feedback_row_id,),
         )

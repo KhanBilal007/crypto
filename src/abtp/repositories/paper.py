@@ -31,6 +31,7 @@ class PaperDashboardRepository:
         account = _mapping(payload.get("account"))
         updated_at = _text(payload.get("updated_at"))
         market_data_source = _text(payload.get("market_data_source"))
+        snapshot_id = str(uuid4())
         self._connection.execute(
             f"""
             INSERT INTO {Tables.PAPER_ACCOUNT_SNAPSHOTS} (
@@ -41,7 +42,7 @@ class PaperDashboardRepository:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                str(uuid4()),
+                snapshot_id,
                 updated_at,
                 market_data_source,
                 _text(account.get("cash")),
@@ -55,6 +56,20 @@ class PaperDashboardRepository:
         )
         self._save_preferences(_mapping(payload.get("ui_preferences")), updated_at=updated_at)
         self._save_transactions(_sequence(payload.get("trades")))
+        self._save_open_orders(_sequence(payload.get("open_paper_orders")), snapshot_id=snapshot_id)
+        self._save_alert_rules(_sequence(payload.get("alert_rules")), snapshot_id=snapshot_id)
+        self._save_journal_entries(
+            _sequence(payload.get("journal_entries")),
+            snapshot_id=snapshot_id,
+        )
+        self._save_trader_feedback(
+            _sequence(payload.get("trader_feedback")),
+            snapshot_id=snapshot_id,
+        )
+        self._save_chart_drawings(
+            _sequence(payload.get("chart_drawings")),
+            snapshot_id=snapshot_id,
+        )
         self._save_strategy_evaluations(strategy_evaluations)
         self._save_risk_decisions(risk_decisions)
         self._save_simulated_fills(simulated_fills)
@@ -130,6 +145,135 @@ class PaperDashboardRepository:
                     _text(trade.get("fee_paid")),
                     _text(trade.get("occurred_at")),
                     _dumps(trade),
+                ),
+            )
+
+    def _save_open_orders(self, orders: Sequence[JsonValue], *, snapshot_id: str) -> None:
+        for item in orders:
+            order = _mapping(item)
+            self._connection.execute(
+                f"""
+                INSERT INTO {Tables.PAPER_OPEN_ORDERS} (
+                    id, snapshot_id, order_id, symbol, order_type, side,
+                    quantity, status, created_at, payload_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid4()),
+                    snapshot_id,
+                    _text(order.get("order_id")),
+                    _text(order.get("symbol")),
+                    _text(order.get("order_type")),
+                    _text(order.get("side")),
+                    _text(order.get("quantity")),
+                    _text(order.get("status")),
+                    _text(order.get("created_at")),
+                    _dumps(order),
+                ),
+            )
+
+    def _save_alert_rules(self, rules: Sequence[JsonValue], *, snapshot_id: str) -> None:
+        for item in rules:
+            rule = _mapping(item)
+            self._connection.execute(
+                f"""
+                INSERT INTO {Tables.PAPER_ALERT_RULES} (
+                    id, snapshot_id, alert_id, alert_type, symbol, threshold,
+                    expected_value, enabled, created_at, payload_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid4()),
+                    snapshot_id,
+                    _text(rule.get("alert_id")),
+                    _text(rule.get("alert_type")),
+                    _text(rule.get("symbol")),
+                    _text(rule.get("threshold")),
+                    _text(rule.get("expected_value")),
+                    _text(rule.get("enabled")),
+                    _text(rule.get("created_at")),
+                    _dumps(rule),
+                ),
+            )
+
+    def _save_journal_entries(self, entries: Sequence[JsonValue], *, snapshot_id: str) -> None:
+        for item in entries:
+            entry = _mapping(item)
+            self._connection.execute(
+                f"""
+                INSERT INTO {Tables.PAPER_JOURNAL_ENTRIES} (
+                    id, snapshot_id, journal_id, trade_ref, symbol, setup_type,
+                    tags_json, created_at, updated_at, payload_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid4()),
+                    snapshot_id,
+                    _text(entry.get("journal_id")),
+                    _text(entry.get("trade_ref")),
+                    _text(entry.get("symbol")),
+                    _text(entry.get("setup_type")),
+                    json.dumps(entry.get("tags", []), sort_keys=True),
+                    _text(entry.get("created_at")),
+                    _text(entry.get("updated_at")),
+                    _dumps(entry),
+                ),
+            )
+
+    def _save_chart_drawings(self, drawings: Sequence[JsonValue], *, snapshot_id: str) -> None:
+        for item in drawings:
+            drawing = _mapping(item)
+            self._connection.execute(
+                f"""
+                INSERT INTO {Tables.PAPER_CHART_DRAWINGS} (
+                    id, snapshot_id, drawing_id, drawing_type, symbol, timeframe,
+                    start_time, start_price, created_at, payload_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid4()),
+                    snapshot_id,
+                    _text(drawing.get("drawing_id")),
+                    _text(drawing.get("drawing_type")),
+                    _text(drawing.get("symbol")),
+                    _text(drawing.get("timeframe")),
+                    _text(drawing.get("start_time")),
+                    _text(drawing.get("start_price")),
+                    _text(drawing.get("created_at")),
+                    _dumps(drawing),
+                ),
+            )
+
+    def _save_trader_feedback(self, items: Sequence[JsonValue], *, snapshot_id: str) -> None:
+        for item in items:
+            feedback = _mapping(item)
+            self._connection.execute(
+                f"""
+                INSERT INTO {Tables.PAPER_TRADER_FEEDBACK} (
+                    id, snapshot_id, feedback_id, reviewer_role, category,
+                    severity, status, summary, recommendation, resolution,
+                    created_at, resolved_at, payload_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid4()),
+                    snapshot_id,
+                    _text(feedback.get("feedback_id")),
+                    _text(feedback.get("reviewer_role")),
+                    _text(feedback.get("category")),
+                    _text(feedback.get("severity")),
+                    _text(feedback.get("status")),
+                    _text(feedback.get("summary")),
+                    _text(feedback.get("recommendation")),
+                    _text(feedback.get("resolution")),
+                    _text(feedback.get("created_at")),
+                    _text(feedback.get("resolved_at")),
+                    _dumps(feedback),
                 ),
             )
 

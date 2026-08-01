@@ -25,6 +25,20 @@ Run the dashboard smoke check without opening a port:
 .\.venv\Scripts\python.exe -m abtp.dashboard.paper_server --smoke
 ```
 
+## Exports
+
+The dashboard exposes local read-only exports:
+
+- `/paper-report` for current paper status and readiness verdict
+- `/paper-transactions.csv` for paper transaction rows
+- `/trader-feedback.csv` for trader review feedback rows
+- `/trader-handoff.md` for a paper-mode trader review packet
+- `/trader-evidence.json` for machine-readable readiness, safety, strategy,
+  portfolio, transaction, and evidence sections
+
+Use `docs/trader_review_handoff.md` before sharing the dashboard with a trader
+reviewer.
+
 ## Visible State
 
 The dashboard shows `PAPER MODE`, `SAFE MODE`, BTC/USDT price, spread, data
@@ -32,6 +46,18 @@ freshness, market regime, strategy recommendation, indicator reasons, AI
 confidence when available, risk decision, data quality, suggested paper trade,
 simulated portfolio state, paper logs, and a link to the paper-trading status
 report.
+
+Advanced Trader and Strategy Lab also include a local Trader Feedback panel for
+reviewer corrections. Feedback entries are paper-only and can record reviewer
+role, category, severity, summary, recommendation, open/closed status,
+resolution, and resolved timestamp. Open blocker-severity feedback blocks
+paper-demo readiness until closed, and closing a blocker requires a resolution
+note.
+
+The Advanced Trader paper order ticket shows Binance-style symbol filters for
+the local BTC/USDT paper market: tick size, step size, minimum quantity, and
+minimum notional. These filters validate simulated paper orders before they are
+staged, but they do not submit orders to Binance.
 
 ## Controls
 

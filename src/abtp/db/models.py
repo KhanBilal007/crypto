@@ -32,6 +32,11 @@ class Tables:
     PAPER_SIMULATED_FILLS = "paper_simulated_fills"
     PAPER_OPERATOR_ACTIONS = "paper_operator_actions"
     PAPER_PREFERENCES = "paper_preferences"
+    PAPER_OPEN_ORDERS = "paper_open_orders"
+    PAPER_ALERT_RULES = "paper_alert_rules"
+    PAPER_JOURNAL_ENTRIES = "paper_journal_entries"
+    PAPER_CHART_DRAWINGS = "paper_chart_drawings"
+    PAPER_TRADER_FEEDBACK = "paper_trader_feedback"
 
 
 DbRow = Row
