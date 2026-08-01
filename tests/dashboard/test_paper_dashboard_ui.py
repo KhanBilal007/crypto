@@ -470,6 +470,9 @@ def test_local_dashboard_can_use_binance_market_data(monkeypatch: pytest.MonkeyP
     pair = AssetPair(Asset("BTC"), Asset("USDT"))
 
     class FixtureBinanceAdapter:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
         def ticker(self, _pair: AssetPair) -> Ticker:
             return Ticker(
                 pair=pair,
@@ -518,10 +521,80 @@ def test_local_dashboard_can_use_binance_market_data(monkeypatch: pytest.MonkeyP
     assert state["live_trading_enabled"] is False
 
 
+def test_binance_market_data_refreshes_while_dashboard_is_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pair = AssetPair(Asset("BTC"), Asset("USDT"))
+
+    class RefreshingFixtureBinanceAdapter:
+        ticker_call_count = 0
+
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def ticker(self, active_pair: AssetPair) -> Ticker:
+            type(self).ticker_call_count += 1
+            offset = Decimal(type(self).ticker_call_count)
+            captured_at = paper_app.DEFAULT_NOW + paper_app.timedelta(
+                seconds=type(self).ticker_call_count
+            )
+            return Ticker(
+                pair=active_pair,
+                price=Decimal("64784.79") + offset,
+                captured_at=captured_at,
+                source_ref="fixture-refresh",
+            )
+
+        def order_book(self, _pair: AssetPair) -> OrderBookSnapshot:
+            return OrderBookSnapshot(
+                exchange=Exchange("binance"),
+                pair=pair,
+                captured_at=paper_app.DEFAULT_NOW,
+                bids=(OrderBookLevel(Decimal("64783.99"), Decimal("0.18")),),
+                asks=(OrderBookLevel(Decimal("64784.00"), Decimal("5.64")),),
+                source_ref="fixture-refresh",
+            )
+
+        def candles(
+            self, _pair: AssetPair, interval: str, _limit: int
+        ) -> tuple[paper_app.Candle, ...]:
+            closes = ("62841.24", "63813.01", "64460.67", "64784.79")
+            return tuple(
+                paper_app.Candle(
+                    exchange=Exchange("binance"),
+                    pair=pair,
+                    interval=interval,
+                    opened_at=paper_app.DEFAULT_NOW + paper_app.timedelta(hours=index),
+                    closed_at=paper_app.DEFAULT_NOW + paper_app.timedelta(hours=index + 1),
+                    open=Decimal(close),
+                    high=Decimal(close) * Decimal("1.005"),
+                    low=Decimal(close) * Decimal("0.995"),
+                    close=Decimal(close),
+                    volume=Decimal("10"),
+                )
+                for index, close in enumerate(closes)
+            )
+
+    monkeypatch.setattr(paper_app, "BinanceSpotMarketDataAdapter", RefreshingFixtureBinanceAdapter)
+
+    controller = build_default_paper_dashboard_controller(market_data_source="binance")
+    controller.market_refresh_interval_seconds = 0
+    first = controller.state()
+    second = controller.state()
+
+    assert first["market"]["source"] == "binance spot"  # type: ignore[index]
+    assert first["market"]["current_price"] != second["market"]["current_price"]  # type: ignore[index]
+    assert first["market"]["updated_at"] != second["market"]["updated_at"]  # type: ignore[index]
+    assert second["live_trading_enabled"] is False
+
+
 def test_binance_daily_trend_blocks_hourly_buy(monkeypatch: pytest.MonkeyPatch) -> None:
     pair = AssetPair(Asset("BTC"), Asset("USDT"))
 
     class FixtureBinanceAdapter:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
         def order_book(self, _pair: AssetPair) -> OrderBookSnapshot:
             return OrderBookSnapshot(
                 exchange=Exchange("binance"),
@@ -1013,6 +1086,7 @@ def test_http_adapter_serves_ui_status_report_and_safe_actions() -> None:
     assert "ticket_order_type" in page.body
     assert "ticket_filters" in page.body
     assert "submitPaperOrderTicket" in page.body
+    assert "setInterval(load, 15000)" in page.body
     assert "cancelPaperOrder" in page.body
     assert "Paper Position" in page.body
     assert "stage_close_position" in page.body

@@ -2739,6 +2739,7 @@ DASHBOARD_HTML = """<!doctype html>
       select.onchange = saveStrategyLabSelection;
     });
     load();
+    setInterval(load, 15000);
   </script>
 </body>
 </html>

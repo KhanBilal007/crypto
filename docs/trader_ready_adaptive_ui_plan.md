@@ -91,6 +91,8 @@ Expected sections:
 - Watchlist and multi-symbol switching for supported spot pairs.
 - Order book and market-depth panel with best bid/ask, spread, depth, and
   liquidity imbalance.
+- Read-only Binance ticker/watchlist refresh while the dashboard is running,
+  with degraded status when refresh fails.
 - Order-flow panel with recent trades, buy/sell pressure, and optional
   liquidity heatmap when data is available.
 - Full strategy state: signal, confidence, regime, data quality, risk decision.

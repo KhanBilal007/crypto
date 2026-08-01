@@ -35,7 +35,11 @@ from abtp.domain import (
     Trade,
 )
 from abtp.domain.models import JsonValue
-from abtp.exchanges import BinanceSpotMarketDataAdapter, ExchangeAdapterError
+from abtp.exchanges import (
+    BinanceSpotMarketDataAdapter,
+    BinanceSpotMarketDataConfig,
+    ExchangeAdapterError,
+)
 from abtp.paper import (
     PaperAccountConfig,
     PaperAccountState,
@@ -436,6 +440,7 @@ class PaperDashboardController:
     state_path: str | None = None
     db_path: str | None = None
     market_data_source: str = "demo"
+    requested_market_data_source: str = "demo"
     selected_watchlist_symbol: str = "BTC/USDT"
     watchlist: tuple[DashboardWatchlistItem, ...] = ()
     ui_mode: DashboardUIMode = DashboardUIMode.ADVANCED_TRADER
@@ -452,18 +457,21 @@ class PaperDashboardController:
     trader_feedback: list[DashboardTraderFeedback] = field(default_factory=list)
     chart_drawings: list[DashboardChartDrawing] = field(default_factory=list)
     events: list[PaperDashboardEvent] = field(default_factory=list)
+    market_refresh_interval_seconds: int = 15
+    last_market_refresh_at: datetime | None = None
 
     def state(self, *, ui_mode: DashboardUIMode | str | None = None) -> dict[str, JsonValue]:
         """Return a browser-safe dashboard state payload."""
 
         active_ui_mode = _ui_mode(ui_mode or self.ui_mode)
-        status = self.api.status(READ_CONTEXT)
+        self.refresh_market_data_if_due()
         latest = self.engine.cycles[-1] if self.engine.cycles else None
-        suggested_trade = _suggested_trade(latest)
         active_watchlist_item = _selected_watchlist_item(
             self.watchlist,
             self.selected_watchlist_symbol,
         )
+        status = self.api.status(READ_CONTEXT, mark_price=active_watchlist_item.price)
+        suggested_trade = _suggested_trade(latest)
         can_approve = (
             latest is not None
             and latest.executed
@@ -585,6 +593,26 @@ class PaperDashboardController:
             state_path=self.state_path,
         )
         return payload
+
+    def refresh_market_data_if_due(self, *, now: datetime | None = None) -> None:
+        """Refresh read-only Binance market observations for a running dashboard."""
+
+        if self.requested_market_data_source != "binance":
+            return
+        checked_at = now or datetime.now(UTC)
+        if (
+            self.last_market_refresh_at is not None
+            and checked_at - self.last_market_refresh_at
+            < timedelta(seconds=self.market_refresh_interval_seconds)
+        ):
+            return
+        self.last_market_refresh_at = checked_at
+        adapter = BinanceSpotMarketDataAdapter(BinanceSpotMarketDataConfig(timeout_seconds=1.0))
+        self.watchlist = _refresh_binance_watchlist(adapter, self.watchlist, checked_at=checked_at)
+        try:
+            self.order_book_snapshot = adapter.order_book(PAIR)
+        except (AttributeError, ExchangeAdapterError, OSError, ValueError):
+            return
 
     def set_ui_mode(self, mode: DashboardUIMode | str) -> dict[str, JsonValue]:
         """Persist the preferred dashboard shell mode without changing trading permissions."""
@@ -1217,6 +1245,7 @@ def build_default_paper_dashboard_controller(
         state_path=state_path if state_path is not None else os.getenv("ABTP_PAPER_STATE_PATH"),
         db_path=db_path if db_path is not None else os.getenv("ABTP_PAPER_DB_PATH"),
         market_data_source=active_market_source,
+        requested_market_data_source=requested_market_source,
         order_book_snapshot=order_book,
         recent_market_trades=recent_market_trades,
         watchlist=watchlist,
@@ -1520,6 +1549,58 @@ def _binance_watchlist(
                 )
             )
     return tuple(items)
+
+
+def _refresh_binance_watchlist(
+    adapter: BinanceSpotMarketDataAdapter,
+    current_items: tuple[DashboardWatchlistItem, ...],
+    *,
+    checked_at: datetime,
+) -> tuple[DashboardWatchlistItem, ...]:
+    existing = {item.symbol: item for item in current_items}
+    refreshed: list[DashboardWatchlistItem] = []
+    for pair in WATCHLIST_PAIRS:
+        try:
+            ticker = adapter.ticker(pair)
+            refreshed.append(
+                DashboardWatchlistItem(
+                    symbol=pair.symbol,
+                    price=ticker.price,
+                    source="binance spot",
+                    updated_at=ticker.captured_at,
+                    data_health="healthy",
+                    paper_tradable=pair.symbol == PAIR.symbol,
+                    note=_watchlist_note(pair.symbol),
+                )
+            )
+        except (AttributeError, ExchangeAdapterError, OSError, ValueError):
+            previous = existing.get(pair.symbol)
+            if previous is None:
+                refreshed.append(
+                    DashboardWatchlistItem(
+                        symbol=pair.symbol,
+                        price=WATCHLIST_DEMO_PRICES[pair.symbol],
+                        source="demo fallback",
+                        updated_at=checked_at,
+                        data_health="degraded",
+                        paper_tradable=pair.symbol == PAIR.symbol,
+                        note=f"{_watchlist_note(pair.symbol)} Binance ticker refresh failed.",
+                    )
+                )
+                continue
+            refreshed.append(
+                DashboardWatchlistItem(
+                    symbol=pair.symbol,
+                    price=previous.price,
+                    source=previous.source,
+                    updated_at=previous.updated_at,
+                    data_health="degraded",
+                    paper_tradable=previous.paper_tradable,
+                    note=previous.note
+                    + " Binance ticker refresh failed; showing last known price.",
+                )
+            )
+    return tuple(refreshed)
 
 
 def _daily_confirmation_from_candles(candles: tuple[Candle, ...]) -> DailyTrendConfirmation:

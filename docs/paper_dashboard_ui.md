@@ -59,6 +59,12 @@ the local BTC/USDT paper market: tick size, step size, minimum quantity, and
 minimum notional. These filters validate simulated paper orders before they are
 staged, but they do not submit orders to Binance.
 
+When Binance market data is configured, the running dashboard refreshes
+read-only ticker/watchlist and order-book observations through `/api/status` on
+a throttled interval. The browser refreshes status every 15 seconds. If Binance
+refresh fails, the dashboard marks the affected market rows degraded instead of
+claiming stale prices are fresh.
+
 ## Controls
 
 The controls are paper-only:

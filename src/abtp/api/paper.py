@@ -179,7 +179,7 @@ class PaperTradingAPI:
         price = mark_price or (latest.snapshot.candle.close if latest else Decimal("1"))
         account = self._engine.account
         return PaperStatusResponse(
-            current_btc_price=latest.snapshot.candle.close if latest else None,
+            current_btc_price=price,
             active_regime=latest.regime.label.value if latest else "unknown",
             latest_signal=_latest_signal(latest),
             latest_risk_decision=(

@@ -42,6 +42,16 @@ def test_paper_status_exposes_trade_decision_context() -> None:
     assert status.as_dict()["portfolio"]["equity"] == str(status.portfolio.equity)  # type: ignore[index]
 
 
+def test_paper_status_uses_mark_price_for_current_price_and_equity() -> None:
+    engine = _engine_with_cycles(("100", "101", "102", "104"))
+    api = PaperTradingAPI(engine)
+
+    status = api.status(READ_CONTEXT, mark_price=Decimal("200"))
+
+    assert status.current_btc_price == Decimal("200")
+    assert status.portfolio.equity == engine.account.equity(Decimal("200"))
+
+
 def test_hold_cycle_exposes_blocked_trade_reason() -> None:
     engine = _engine_with_cycles(("100",))
     api = PaperTradingAPI(engine)
