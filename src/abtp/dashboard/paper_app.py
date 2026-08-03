@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from sqlite3 import Connection
 from uuid import UUID, uuid4
@@ -231,11 +232,13 @@ class DashboardWatchlistItem:
     data_health: str
     paper_tradable: bool
     note: str
+    price_change_24h_pct: Decimal | None = None
 
     def as_dict(self, *, selected_symbol: str) -> dict[str, JsonValue]:
         return {
             "symbol": self.symbol,
             "price": _str(self.price),
+            "price_change_24h_pct": _str(self.price_change_24h_pct),
             "source": self.source,
             "updated_at": self.updated_at.isoformat(),
             "data_health": self.data_health,
@@ -449,6 +452,8 @@ class PaperDashboardController:
     strategy_lab_timeframe: str = "1h"
     strategy_lab_run_mode: StrategyLabRunMode = StrategyLabRunMode.PAPER
     strategy_lab_parameter_profile: str = "default"
+    sidebar_collapsed: bool = False
+    notification_last_seen_at: datetime | None = None
     order_book_snapshot: OrderBookSnapshot | None = None
     recent_market_trades: tuple[Trade, ...] = ()
     open_paper_orders: list[DashboardPaperOrder] = field(default_factory=list)
@@ -470,7 +475,9 @@ class PaperDashboardController:
             self.watchlist,
             self.selected_watchlist_symbol,
         )
+        server_time = datetime.now(UTC)
         status = self.api.status(READ_CONTEXT, mark_price=active_watchlist_item.price)
+        strategy_state = _strategy_state(status, latest)
         suggested_trade = _suggested_trade(latest)
         can_approve = (
             latest is not None
@@ -479,10 +486,33 @@ class PaperDashboardController:
             and not status.paused
             and not status.kill_switch_active
         )
+        alert_state = _alert_state(
+            self.alert_rules,
+            market_item=active_watchlist_item,
+            status=status,
+            latest=latest,
+            events=self.events,
+            recommendation=str(strategy_state.get("recommendation", "HOLD")),
+        )
+        notifications = _notification_state(
+            alerts=alert_state,
+            status=status,
+            market_item=active_watchlist_item,
+            latest=latest,
+            last_seen_at=self.notification_last_seen_at,
+            server_time=server_time,
+        )
+        refresh = _refresh_status(
+            last_refresh_at=self.last_market_refresh_at,
+            interval_seconds=self.market_refresh_interval_seconds,
+            server_time=server_time,
+        )
+        app_metadata = _app_metadata(server_time)
         payload: dict[str, JsonValue] = {
             "mode": "PAPER MODE",
             "safe_mode": True,
             "live_trading_enabled": False,
+            "app": app_metadata,
             "ui_mode": active_ui_mode.value,
             "ui": {
                 "mode": active_ui_mode.value,
@@ -491,6 +521,8 @@ class PaperDashboardController:
                     {"value": DashboardUIMode.ADVANCED_TRADER.value, "label": "Advanced Trader"},
                     {"value": DashboardUIMode.STRATEGY_LAB.value, "label": "Strategy Lab"},
                 ],
+                "navigation": _ui_navigation_state(active_ui_mode),
+                "sidebar_collapsed": self.sidebar_collapsed,
                 "trading_mode": "paper",
                 "live_trading_enabled": False,
             },
@@ -507,14 +539,28 @@ class PaperDashboardController:
                 "paper_strategy_symbol": "BTC/USDT",
                 "source": active_watchlist_item.source,
                 "current_price": _str(active_watchlist_item.price),
+                "price_change_24h_pct": _str(active_watchlist_item.price_change_24h_pct),
                 "spread": _str(_latest_spread(latest)),
                 "data_freshness": active_watchlist_item.data_health,
+                "exchange_connection": _exchange_connection_status(
+                    requested_source=self.requested_market_data_source,
+                    market_item=active_watchlist_item,
+                    latest=latest,
+                ),
+                "exchange_connection_detail": _exchange_connection_detail(
+                    requested_source=self.requested_market_data_source,
+                    market_item=active_watchlist_item,
+                    latest=latest,
+                ),
+                "latency_ms": _latency_ms(latest),
+                "trend_strength_pct": _trend_strength_pct(latest),
+                "trend_strength_source": _trend_strength_source(latest),
                 "market_regime": status.active_regime,
                 "updated_at": active_watchlist_item.updated_at.isoformat(),
                 "paper_tradable": active_watchlist_item.paper_tradable,
                 "symbol_note": active_watchlist_item.note,
             },
-            "strategy": _strategy_state(status, latest),
+            "strategy": strategy_state,
             "suggested_paper_trade": suggested_trade,
             "portfolio": {
                 "starting_balance": "10000",
@@ -523,6 +569,9 @@ class PaperDashboardController:
                 "open_btc": str(status.portfolio.base_quantity),
                 "realized_pnl": str(status.portfolio.realized_pnl),
                 "unrealized_pnl": _unrealized_pnl(status),
+                "today_pnl": _today_pnl(cycles=self.engine.cycles, status=status),
+                "today_pnl_pct": _today_pnl_pct(cycles=self.engine.cycles, status=status),
+                "equity_sparkline": _portfolio_sparkline(self.engine.account.state.equity_history),
                 "drawdown": str(status.portfolio.drawdown_pct),
                 "risk_halts": list(_risk_halts(status)),
             },
@@ -549,13 +598,20 @@ class PaperDashboardController:
             ),
             "alert_rules": _alert_rule_state(self.alert_rules),
             "trader_feedback": _trader_feedback_state(self.trader_feedback),
-            "alerts": _alert_state(
-                self.alert_rules,
+            "alerts": alert_state,
+            "notifications": notifications,
+            "refresh": refresh,
+            "activity": _activity_state(self.events, limit=5),
+            "runtime_telemetry": _runtime_telemetry(
                 market_item=active_watchlist_item,
-                status=status,
                 latest=latest,
-                events=self.events,
-                recommendation=str(_strategy_state(status, latest).get("recommendation", "HOLD")),
+                cycles=self.engine.cycles,
+                status=status,
+                notifications=notifications,
+                app_metadata=app_metadata,
+                refresh=refresh,
+                requested_source=self.requested_market_data_source,
+                equity_history=self.engine.account.state.equity_history,
             ),
             "logs": list(event.as_dict() for event in self.events),
             "transactions": _transaction_state(self.api.trades(READ_CONTEXT)),
@@ -620,6 +676,30 @@ class PaperDashboardController:
         self.ui_mode = _ui_mode(mode)
         _save_dashboard_preferences(self)
         return self.state()
+
+    def set_ui_shell_preferences(
+        self,
+        *,
+        sidebar_collapsed: bool | None = None,
+    ) -> dict[str, JsonValue]:
+        """Persist local shell presentation preferences only."""
+
+        if sidebar_collapsed is not None:
+            self.sidebar_collapsed = sidebar_collapsed
+        _save_dashboard_preferences(self)
+        return self.state()
+
+    def mark_notifications_read(self) -> dict[str, JsonValue]:
+        """Mark the local notification bell as seen without deleting audit evidence."""
+
+        self.notification_last_seen_at = datetime.now(UTC)
+        _save_dashboard_preferences(self)
+        return self.state()
+
+    def activity_state(self, *, limit: int | None = None) -> dict[str, JsonValue]:
+        """Return the paper dashboard activity timeline read model."""
+
+        return _activity_state(self.events, limit=limit)
 
     def set_strategy_lab_selection(
         self,
@@ -1525,6 +1605,7 @@ def _binance_watchlist(
     for pair in WATCHLIST_PAIRS:
         try:
             ticker = adapter.ticker(pair)
+            price_change = _binance_price_change_24h_pct(adapter, pair)
             items.append(
                 DashboardWatchlistItem(
                     symbol=pair.symbol,
@@ -1534,6 +1615,7 @@ def _binance_watchlist(
                     data_health="healthy",
                     paper_tradable=pair.symbol == PAIR.symbol,
                     note=_watchlist_note(pair.symbol),
+                    price_change_24h_pct=price_change,
                 )
             )
         except (AttributeError, ExchangeAdapterError, OSError, ValueError):
@@ -1562,6 +1644,7 @@ def _refresh_binance_watchlist(
     for pair in WATCHLIST_PAIRS:
         try:
             ticker = adapter.ticker(pair)
+            price_change = _binance_price_change_24h_pct(adapter, pair)
             refreshed.append(
                 DashboardWatchlistItem(
                     symbol=pair.symbol,
@@ -1571,6 +1654,7 @@ def _refresh_binance_watchlist(
                     data_health="healthy",
                     paper_tradable=pair.symbol == PAIR.symbol,
                     note=_watchlist_note(pair.symbol),
+                    price_change_24h_pct=price_change,
                 )
             )
         except (AttributeError, ExchangeAdapterError, OSError, ValueError):
@@ -1598,9 +1682,20 @@ def _refresh_binance_watchlist(
                     paper_tradable=previous.paper_tradable,
                     note=previous.note
                     + " Binance ticker refresh failed; showing last known price.",
+                    price_change_24h_pct=previous.price_change_24h_pct,
                 )
             )
     return tuple(refreshed)
+
+
+def _binance_price_change_24h_pct(
+    adapter: BinanceSpotMarketDataAdapter,
+    pair: AssetPair,
+) -> Decimal | None:
+    try:
+        return adapter.price_change_24h_pct(pair)
+    except (AttributeError, ExchangeAdapterError, OSError, ValueError):
+        return None
 
 
 def _daily_confirmation_from_candles(candles: tuple[Candle, ...]) -> DailyTrendConfirmation:
@@ -1956,6 +2051,402 @@ def _alert_state(
     }
 
 
+def _ui_navigation_state(active_ui_mode: DashboardUIMode) -> list[JsonValue]:
+    items: list[dict[str, JsonValue]] = [
+        {
+            "key": "dashboard",
+            "label": "Dashboard",
+            "target_mode": DashboardUIMode.BEGINNER.value,
+            "status": "available",
+            "paper_safe": True,
+        },
+        {
+            "key": "advanced_trader",
+            "label": "Advanced Trader",
+            "target_mode": DashboardUIMode.ADVANCED_TRADER.value,
+            "status": "available",
+            "paper_safe": True,
+        },
+        {
+            "key": "strategy_lab",
+            "label": "Strategy Lab",
+            "target_mode": DashboardUIMode.STRATEGY_LAB.value,
+            "status": "available",
+            "paper_safe": True,
+        },
+        {
+            "key": "backtesting",
+            "label": "Backtesting",
+            "target_mode": DashboardUIMode.ADVANCED_TRADER.value,
+            "target_panel": "backtest_summary",
+            "status": "embedded",
+            "paper_safe": True,
+        },
+        {
+            "key": "reports",
+            "label": "Reports",
+            "route": "/paper-report",
+            "status": "external_report",
+            "paper_safe": True,
+        },
+        {
+            "key": "alerts",
+            "label": "Alerts",
+            "target_mode": DashboardUIMode.ADVANCED_TRADER.value,
+            "target_panel": "alerts",
+            "status": "embedded",
+            "paper_safe": True,
+        },
+        {
+            "key": "logs",
+            "label": "Logs",
+            "route": "/api/activity",
+            "status": "available",
+            "paper_safe": True,
+        },
+        {
+            "key": "settings",
+            "label": "Settings",
+            "route": "/api/ui-shell",
+            "status": "preference_only",
+            "paper_safe": True,
+        },
+    ]
+    for item in items:
+        item["active"] = item.get("target_mode") == active_ui_mode.value
+    navigation: list[JsonValue] = []
+    navigation.extend(items)
+    return navigation
+
+
+def _notification_state(
+    *,
+    alerts: Mapping[str, JsonValue],
+    status: PaperStatusResponse,
+    market_item: DashboardWatchlistItem,
+    latest: PaperTradingCycleResult | None,
+    last_seen_at: datetime | None,
+    server_time: datetime,
+) -> dict[str, JsonValue]:
+    triggered = _as_list(alerts.get("triggered", []))
+    safety_notifications: list[str] = []
+    for halt in _risk_halts(status):
+        if halt != "none":
+            safety_notifications.append(halt)
+    if status.paused:
+        safety_notifications.append("paper bot is paused")
+    if status.kill_switch_active:
+        safety_notifications.append("paper kill switch is active")
+    if market_item.data_health != "healthy":
+        safety_notifications.append(f"market data health is {market_item.data_health}")
+    if latest is not None and latest.snapshot.health.is_degraded:
+        safety_notifications.append("latest stream health is degraded")
+    notification_time = latest.snapshot.received_at if latest is not None else server_time
+    items: list[JsonValue] = []
+    items.extend(
+        _notification_item(item, category="alert", occurred_at=notification_time)
+        for item in triggered
+    )
+    items.extend(
+        _notification_item(item, category="safety", occurred_at=notification_time)
+        for item in safety_notifications
+    )
+    count = len(items)
+    unread_count = 0
+    for item in items:
+        if isinstance(item, Mapping) and not _notification_seen(item, last_seen_at=last_seen_at):
+            unread_count += 1
+    return {
+        "count": count,
+        "unread_count": unread_count,
+        "bell_state": "attention" if unread_count else "clear",
+        "triggered_alert_count": len(triggered),
+        "safety_notification_count": len(safety_notifications),
+        "items": items,
+        "last_seen_at": last_seen_at.isoformat() if last_seen_at is not None else "",
+        "notification_scope": "local_dashboard_only",
+    }
+
+
+def _notification_item(
+    item: JsonValue,
+    *,
+    category: str,
+    occurred_at: datetime,
+) -> dict[str, JsonValue]:
+    if isinstance(item, Mapping):
+        alert_id = str(item.get("alert_id", "local-alert"))
+        message = str(item.get("message", "dashboard alert"))
+        item_occurred_at = _datetime_preference(item.get("occurred_at", "")) or occurred_at
+        severity = "action" if category == "alert" else "warning"
+        return {
+            "notification_id": f"{category}:{alert_id}:{message}",
+            "category": category,
+            "severity": severity,
+            "message": message,
+            "symbol": str(item.get("symbol", "")),
+            "occurred_at": item_occurred_at.isoformat(),
+            "paper_only": True,
+        }
+    message = str(item)
+    return {
+        "notification_id": f"{category}:{message}",
+        "category": category,
+        "severity": "warning",
+        "message": message,
+        "symbol": "",
+        "occurred_at": occurred_at.isoformat(),
+        "paper_only": True,
+    }
+
+
+def _notification_seen(
+    item: Mapping[str, JsonValue],
+    *,
+    last_seen_at: datetime | None,
+) -> bool:
+    if last_seen_at is None:
+        return False
+    try:
+        occurred_at = datetime.fromisoformat(str(item.get("occurred_at", "")))
+    except ValueError:
+        return False
+    return occurred_at <= last_seen_at
+
+
+def _activity_state(
+    events: list[PaperDashboardEvent],
+    *,
+    limit: int | None,
+) -> dict[str, JsonValue]:
+    active_limit = None if limit is None else max(0, limit)
+    items: list[JsonValue] = []
+    items.extend(_activity_item(event) for event in events)
+    visible_items = items if active_limit is None else items[:active_limit]
+    return {
+        "items": visible_items,
+        "total_count": len(items),
+        "visible_count": len(visible_items),
+        "has_more": active_limit is not None and len(items) > active_limit,
+        "view_all_route": "/api/activity",
+        "paper_only": True,
+    }
+
+
+def _activity_item(event: PaperDashboardEvent) -> dict[str, JsonValue]:
+    severity = _activity_severity(event.event_type)
+    return {
+        "event_type": event.event_type,
+        "message": event.message,
+        "reason": event.reason,
+        "occurred_at": event.occurred_at.isoformat(),
+        "severity": severity,
+        "status_label": _activity_status_label(severity),
+        "paper_only": True,
+    }
+
+
+def _activity_severity(event_type: str) -> str:
+    if any(token in event_type for token in ("emergency", "blocked", "failed")):
+        return "action"
+    if any(token in event_type for token in ("reject", "delete", "cancel", "pause")):
+        return "warning"
+    if any(token in event_type for token in ("approve", "resume", "save", "add", "submit")):
+        return "system"
+    return "info"
+
+
+def _activity_status_label(severity: str) -> str:
+    labels = {
+        "action": "ACTION",
+        "warning": "WARN",
+        "system": "SYSTEM",
+        "info": "INFO",
+    }
+    return labels.get(severity, "INFO")
+
+
+def _refresh_status(
+    *,
+    last_refresh_at: datetime | None,
+    interval_seconds: int,
+    server_time: datetime,
+) -> dict[str, JsonValue]:
+    active_interval = max(interval_seconds, 1)
+    base_time = last_refresh_at or server_time
+    next_check_at = base_time + timedelta(seconds=active_interval)
+    if next_check_at < server_time:
+        next_check_at = server_time
+    seconds_remaining = max(0, int((next_check_at - server_time).total_seconds()))
+    return {
+        "server_time": server_time.isoformat(),
+        "last_check_at": base_time.isoformat(),
+        "next_check_at": next_check_at.isoformat(),
+        "next_check_in_seconds": seconds_remaining,
+        "interval_seconds": active_interval,
+    }
+
+
+def _app_metadata(server_time: datetime) -> dict[str, JsonValue]:
+    try:
+        app_version = version("abtp")
+    except PackageNotFoundError:
+        app_version = "not_available"
+    return {
+        "name": "abtp",
+        "version": app_version,
+        "version_source": "python_package_metadata",
+        "server_time": server_time.isoformat(),
+    }
+
+
+def _runtime_telemetry(
+    *,
+    market_item: DashboardWatchlistItem,
+    latest: PaperTradingCycleResult | None,
+    cycles: tuple[PaperTradingCycleResult, ...],
+    status: PaperStatusResponse,
+    notifications: Mapping[str, JsonValue],
+    app_metadata: Mapping[str, JsonValue],
+    refresh: Mapping[str, JsonValue],
+    requested_source: str,
+    equity_history: tuple[Decimal, ...],
+) -> dict[str, JsonValue]:
+    return {
+        "module_numbers": [
+            "1_24h_price_change_pct",
+            "2_trend_strength_pct",
+            "3_exchange_connection_status",
+            "4_notification_bell_state",
+            "5_latency_ms",
+            "6_backend_app_version",
+            "7_portfolio_sparkline",
+            "8_today_pnl",
+            "9_next_check_countdown",
+        ],
+        "price_change_24h_pct": _str(market_item.price_change_24h_pct),
+        "price_change_24h_source": (
+            "binance_public_24hr_ticker"
+            if market_item.price_change_24h_pct is not None
+            else "not_available"
+        ),
+        "trend_strength_pct": _trend_strength_pct(latest),
+        "trend_strength_source": _trend_strength_source(latest),
+        "exchange_connection": _exchange_connection_status(
+            requested_source=requested_source,
+            market_item=market_item,
+            latest=latest,
+        ),
+        "exchange_connection_detail": _exchange_connection_detail(
+            requested_source=requested_source,
+            market_item=market_item,
+            latest=latest,
+        ),
+        "notification_count": notifications.get("count", 0),
+        "bell_state": notifications.get("bell_state", "clear"),
+        "latency_ms": _latency_ms(latest),
+        "app_version": app_metadata.get("version", "not_available"),
+        "app_version_source": app_metadata.get("version_source", "not_available"),
+        "portfolio_sparkline": _portfolio_sparkline(equity_history),
+        "today_pnl": _today_pnl(cycles=cycles, status=status),
+        "today_pnl_pct": _today_pnl_pct(cycles=cycles, status=status),
+        "today_pnl_source": "paper_cycle_equity_for_latest_session_date",
+        "next_check_at": refresh.get("next_check_at", "not_available"),
+        "next_check_in_seconds": refresh.get("next_check_in_seconds", "not_available"),
+        "server_time": refresh.get("server_time", "not_available"),
+    }
+
+
+def _exchange_connection_status(
+    *,
+    requested_source: str,
+    market_item: DashboardWatchlistItem,
+    latest: PaperTradingCycleResult | None,
+) -> str:
+    if requested_source != "binance":
+        return "not_configured"
+    if (
+        market_item.source == "binance spot"
+        and market_item.data_health == "healthy"
+        and (latest is None or latest.snapshot.health.is_connected)
+    ):
+        return "connected"
+    if "fallback" in market_item.source or market_item.data_health == "degraded":
+        return "degraded"
+    return "disconnected"
+
+
+def _exchange_connection_detail(
+    *,
+    requested_source: str,
+    market_item: DashboardWatchlistItem,
+    latest: PaperTradingCycleResult | None,
+) -> str:
+    if requested_source != "binance":
+        return "Binance adapter is not configured for this dashboard session."
+    stream_status = latest.snapshot.health.status if latest is not None else "unavailable"
+    return (
+        f"source={market_item.source}; health={market_item.data_health}; "
+        f"stream={stream_status}; updated_at={market_item.updated_at.isoformat()}"
+    )
+
+
+def _latency_ms(latest: PaperTradingCycleResult | None) -> str:
+    if latest is None:
+        return "not_available"
+    return str(latest.snapshot.health.latency_ms)
+
+
+def _trend_strength_pct(latest: PaperTradingCycleResult | None) -> str:
+    if latest is None:
+        return "not_available"
+    value = latest.features.values.get("market.return_3")
+    if value is None:
+        return "not_available"
+    return str(abs(_decimal(value)) * Decimal("100"))
+
+
+def _trend_strength_source(latest: PaperTradingCycleResult | None) -> str:
+    if latest is None or "market.return_3" not in latest.features.values:
+        return "not_available"
+    return "feature:market.return_3_abs_pct"
+
+
+def _today_pnl(
+    *,
+    cycles: tuple[PaperTradingCycleResult, ...],
+    status: PaperStatusResponse,
+) -> str:
+    if not cycles:
+        return "not_available"
+    latest = cycles[-1]
+    latest_day = latest.snapshot.received_at.date()
+    same_day = [cycle for cycle in cycles if cycle.snapshot.received_at.date() == latest_day]
+    baseline = same_day[0].equity if same_day else Decimal("10000")
+    return str(status.portfolio.equity - baseline)
+
+
+def _today_pnl_pct(
+    *,
+    cycles: tuple[PaperTradingCycleResult, ...],
+    status: PaperStatusResponse,
+) -> str:
+    if not cycles:
+        return "not_available"
+    latest = cycles[-1]
+    latest_day = latest.snapshot.received_at.date()
+    same_day = [cycle for cycle in cycles if cycle.snapshot.received_at.date() == latest_day]
+    baseline = same_day[0].equity if same_day else Decimal("10000")
+    if baseline <= DECIMAL_ZERO:
+        return "not_available"
+    return _pct((status.portfolio.equity - baseline) / baseline)
+
+
+def _portfolio_sparkline(equity_history: tuple[Decimal, ...]) -> list[JsonValue]:
+    points = list(equity_history[-16:])
+    return [{"index": index, "equity": str(value)} for index, value in enumerate(points)]
+
+
 def _triggered_alert(
     rule: DashboardAlertRule,
     *,
@@ -2027,6 +2518,7 @@ def _alert_payload(rule: DashboardAlertRule, *, message: str) -> dict[str, JsonV
         "alert_type": rule.alert_type.value,
         "symbol": rule.symbol,
         "message": message,
+        "occurred_at": rule.created_at.isoformat(),
         "paper_only": True,
     }
 
@@ -2418,6 +2910,7 @@ def _adaptive_view_sections(
     logs = _as_list(payload["logs"])
     watchlist = _as_mapping(payload["watchlist"])
     alerts = _as_mapping(payload["alerts"])
+    runtime_telemetry = _as_mapping(payload["runtime_telemetry"])
     alert_rules = _as_list(payload["alert_rules"])
     reasons = _as_text_list(strategy.get("indicator_reasons", []))
     actionable = can_approve and str(trade.get("status", "")) == "risk_approved_simulated_fill"
@@ -2477,6 +2970,7 @@ def _adaptive_view_sections(
                 "trade_journal_analytics",
                 "paper_order_ticket",
                 "open_paper_orders",
+                "runtime_telemetry_status",
             ],
             "market": market_payload,
             "strategy": strategy_payload,
@@ -2499,6 +2993,8 @@ def _adaptive_view_sections(
             "chart_drawings": chart_drawings,
             "watchlist": watchlist_payload,
             "alerts": dict(alerts),
+            "notifications": dict(_as_mapping(payload["notifications"])),
+            "runtime_telemetry": dict(runtime_telemetry),
             "alert_rules": alert_rules,
             "open_paper_orders": open_orders,
             "order_ticket": _advanced_order_ticket_payload(latest=latest),
@@ -3971,6 +4467,7 @@ def _dashboard_readiness_gate(
                     "risk_safety",
                     "trade_journal",
                     "trader_feedback",
+                    "runtime_telemetry",
                     "backtest_summary",
                     "performance",
                     "exit_review",
@@ -4181,12 +4678,15 @@ def _paper_safe_route_checks() -> list[JsonValue]:
         ("GET /", "Dashboard shell only"),
         ("GET /api/status", "Read-only paper dashboard status"),
         ("GET /api/readiness", "Read-only readiness checklist"),
+        ("GET /api/activity", "Read-only local paper activity timeline"),
         ("GET /paper-report", "Read-only paper report export"),
         ("GET /trader-handoff.md", "Read-only trader review handoff export"),
         ("GET /trader-evidence.json", "Read-only trader evidence JSON export"),
         ("GET /paper-transactions.csv", "Read-only paper transaction export"),
         ("GET /trader-feedback.csv", "Read-only trader feedback CSV export"),
         ("POST /api/ui-mode", "UI preference only"),
+        ("POST /api/ui-shell", "UI shell preference only"),
+        ("POST /api/mark-notifications-read", "Local notification preference only"),
         ("POST /api/strategy-lab-selection", "Strategy Lab preference only"),
         ("POST /api/watchlist-symbol", "Watchlist preference only"),
         ("POST /api/alert-rule", "Creates local dashboard alert rule only"),
@@ -4311,6 +4811,24 @@ def _ui_mode(value: DashboardUIMode | str) -> DashboardUIMode:
         raise PaperDashboardActionError(message) from exc
 
 
+def _bool_preference(value: JsonValue) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "collapsed"}
+    return False
+
+
+def _datetime_preference(value: JsonValue) -> datetime | None:
+    text = str(value)
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
 def _save_dashboard_preferences(controller: PaperDashboardController) -> None:
     _save_paper_account_state(controller)
 
@@ -4394,6 +4912,10 @@ def _paper_dashboard_state_payload(controller: PaperDashboardController) -> dict
         "ui_preferences": {
             "mode": controller.ui_mode.value,
             "selected_watchlist_symbol": controller.selected_watchlist_symbol,
+            "sidebar_collapsed": controller.sidebar_collapsed,
+            "notification_last_seen_at": controller.notification_last_seen_at.isoformat()
+            if controller.notification_last_seen_at is not None
+            else "",
             "strategy_lab": {
                 "strategy": controller.strategy_lab_strategy,
                 "symbol": controller.strategy_lab_symbol,
@@ -4430,6 +4952,12 @@ def _restore_paper_payload(
         controller.ui_mode = _ui_mode(str(preferences.get("mode", controller.ui_mode.value)))
         controller.selected_watchlist_symbol = _watchlist_symbol(
             str(preferences.get("selected_watchlist_symbol", controller.selected_watchlist_symbol))
+        )
+        controller.sidebar_collapsed = _bool_preference(
+            preferences.get("sidebar_collapsed", controller.sidebar_collapsed)
+        )
+        controller.notification_last_seen_at = _datetime_preference(
+            preferences.get("notification_last_seen_at", "")
         )
         strategy_lab = preferences.get("strategy_lab", {})
         if isinstance(strategy_lab, Mapping):

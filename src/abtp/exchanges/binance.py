@@ -89,6 +89,13 @@ class BinanceSpotMarketDataAdapter:
             source_ref=f"binance:spot:ticker:{pair.symbol}:{captured_at.isoformat()}",
         )
 
+    def price_change_24h_pct(self, pair: AssetPair) -> Decimal:
+        """Return Binance's public 24h price-change percentage for a spot pair."""
+
+        self._require_symbol(pair)
+        payload = self._get_json("/api/v3/ticker/24hr", {"symbol": _binance_symbol(pair)})
+        return _decimal_field(payload, "priceChangePercent")
+
     def candles(self, pair: AssetPair, interval: str, limit: int) -> tuple[Candle, ...]:
         self._require_symbol(pair)
         if limit <= 0:

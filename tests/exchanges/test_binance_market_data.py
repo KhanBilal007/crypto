@@ -13,6 +13,9 @@ class FixtureBinanceAdapter(BinanceSpotMarketDataAdapter):
         if path == "/api/v3/ticker/price":
             assert params == {"symbol": "BTCUSDT"}
             return {"symbol": "BTCUSDT", "price": "64784.79"}
+        if path == "/api/v3/ticker/24hr":
+            assert params == {"symbol": "BTCUSDT"}
+            return {"symbol": "BTCUSDT", "priceChangePercent": "2.34"}
         if path == "/api/v3/depth":
             assert params == {"symbol": "BTCUSDT", "limit": "10"}
             return {
@@ -88,12 +91,14 @@ def test_binance_spot_adapter_reads_public_price_book_and_candles() -> None:
 
     symbols = adapter.symbols()
     ticker = adapter.ticker(pair)
+    change_24h = adapter.price_change_24h_pct(pair)
     book = adapter.order_book(pair)
     candles = adapter.candles(pair, "1h", 4)
     trades = adapter.trades(pair, candles[-1].closed_at.replace(minute=0), candles[-1].closed_at)
 
     assert {item.pair.symbol for item in symbols} == {"BTC/USDT", "ETH/USDT", "SOL/USDT"}
     assert ticker.price == Decimal("64784.79")
+    assert change_24h == Decimal("2.34")
     assert book.bids[0].price == Decimal("64783.99")
     assert book.bids[1].quantity == Decimal("0.20")
     assert book.asks[0].price == Decimal("64784.00")

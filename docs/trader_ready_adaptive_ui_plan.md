@@ -343,6 +343,47 @@ Stage C should be split into smaller Advanced Trader milestones:
    type, mistake review, lessons, chart context, P/L by strategy/regime
    summaries, persistence, and paper-safe dashboard routes.
 
+8. Runtime telemetry modules:
+   Add a compact dashboard status layer backed by real backend fields only. If a
+   value cannot be measured from the active exchange adapter, paper engine, alert
+   state, package metadata, or account ledger, the field must be marked
+   `not_available` or degraded rather than filled with a fake value.
+
+   1. 24h price change percentage:
+      Read from the exchange adapter's public 24h ticker when configured. Demo
+      mode and insufficient backend evidence must return `not_available`.
+
+   2. Trend strength percentage:
+      Compute from real paper-engine feature/candle evidence, such as the
+      current lookback return, and expose the calculation source.
+
+   3. True exchange connection status:
+      Report adapter connectivity separately from market data source and
+      freshness. The UI must distinguish `connected`, `degraded`,
+      `disconnected`, and `not_configured`.
+
+   4. Notification count and bell state:
+      Count triggered local dashboard alerts and safety notifications from the
+      alert/risk state. The bell state must reflect actual notification count.
+
+   5. Latency in milliseconds:
+      Surface the latest stream/adapter latency from backend health evidence.
+
+   6. App version from backend:
+      Read the installed ABTP package version from backend package metadata.
+
+   7. Portfolio mini sparklines:
+      Use the paper account's recorded equity history, not random or cosmetic
+      points.
+
+   8. Today's P/L:
+      Expose today's mark-to-market P/L as a separate daily metric computed from
+      current paper-cycle/account evidence.
+
+   9. Exact next check-in countdown:
+      Return backend `server_time`, `next_check_at`, refresh interval, and
+      seconds remaining so the browser can show a real countdown.
+
 ### Stage D: Strategy Lab
 
 - Add strategy profile registry.
@@ -378,6 +419,82 @@ verdict that separates paper-demo readiness from live-capital readiness. The
 paper report now exports proof points, blockers, warnings, and next steps.
 Trader-review handoff, evidence JSON, and local structured feedback capture are
 implemented for paper-mode reviewer workflows.
+
+### Stage G: Reference UI Parity Shell
+
+Use the supplied ABTP dashboard reference image as the visual target while
+keeping all displayed values backed by real backend evidence. If an editable
+design file is later provided, use it for spacing, typography, icons, and exact
+component proportions. Until then, treat the image as a high-level layout guide,
+not a source of fake data.
+
+1. Brand and top header:
+   Add backend app/brand metadata for the ABTP name, product label, package
+   version, trading mode, active symbol, exchange/source, last updated time,
+   and status fields. The header must render `not_configured`,
+   `not_available`, or degraded states when the backend cannot verify a value.
+
+2. Market status strip:
+   Keep current price, 24h price change, trend strength, mode, true exchange
+   connection, latency, notification bell count, next check countdown, and last
+   updated backed by the runtime telemetry fields from Stage C.8.
+
+3. Sidebar navigation:
+   Add backend navigation metadata for Dashboard, Advanced Trader, Strategy
+   Lab, Backtesting, Reports, Alerts, Logs, and Settings. Items that are not
+   full standalone workspaces yet must be marked `coming_soon`, `embedded`, or
+   `external_report` rather than pretending to be implemented pages.
+
+4. Sidebar collapse:
+   Persist the collapsed/expanded sidebar state as a UI shell preference. This
+   preference must not change trading mode, risk status, or paper/live
+   permissions.
+
+5. Notification bell:
+   Add backend notification read/unread state so the bell badge can distinguish
+   total notification count from unread count. Marking notifications as read
+   must be a local dashboard preference/action only.
+
+6. Recent activity view:
+   Add a backend activity read model with severity/status labels and a
+   `View All` route for full logs. The compact dashboard timeline can show the
+   latest items while the backend preserves the complete local paper audit log.
+
+7. Portfolio cards:
+   Render portfolio value, cash, BTC holdings, and today's P/L as separate
+   metric cards using the real paper ledger and equity history sparkline. Do
+   not generate cosmetic sparkline points.
+
+8. Recommendation and why panels:
+   Redesign the beginner/dashboard recommendation card into a large command
+   state with confidence and a separate checklist of evidence/reasons. Each
+   checklist row must come from strategy, risk, indicator, or market evidence.
+
+9. Control action tiles:
+   Restyle approve, reject, pause, and emergency stop as large action tiles
+   while preserving existing paper-only route guards and approval blockers.
+
+10. AI explanation and verification:
+    Show model/source, verification status, and explanation confidence only
+    when these values are present in the backend payload. Otherwise use
+    `not_available`.
+
+11. Footer status rail:
+    Match the reference footer with paper mode, data health, latency, exchange
+    connection, risk status, and version. The footer must reuse the same
+    backend telemetry fields as the header.
+
+12. Icon and visual system:
+    Replace temporary text placeholders with a real icon system during the UI
+    implementation pass. Icons are presentation only and must not imply
+    backend capabilities that are not exposed by the route inventory.
+
+Status: implemented as a reference-style paper dashboard shell with top status
+rail, sidebar navigation, recommendation hero card, evidence checklist,
+portfolio cards, action tiles, AI explanation card, recent activity timeline,
+footer status rail, navigation metadata, sidebar preference persistence,
+notification read state, and activity view-all routing. The UI still renders
+`not_available`, degraded, or `not_configured` when backend evidence is absent.
 
 ## Acceptance Criteria
 

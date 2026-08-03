@@ -95,6 +95,10 @@ def handle_dashboard_request(
             return _json_response(controller.state(ui_mode=mode))
         if method == "GET" and route == "/api/readiness":
             return _json_response(_mapping_field(controller.state(), "readiness"))
+        if method == "GET" and route == "/api/activity":
+            query = parse_qs(parsed_url.query)
+            limit = _optional_int(query.get("limit", [None])[0])
+            return _json_response(controller.activity_state(limit=limit))
         if method == "GET" and route == "/paper-report":
             return DashboardHttpResponse(
                 status=HTTPStatus.OK,
@@ -125,6 +129,15 @@ def handle_dashboard_request(
             payload = _json_body(body)
             mode = str(payload.get("ui_mode", ""))
             return _json_response(controller.set_ui_mode(mode))
+        if method == "POST" and route == "/api/ui-shell":
+            payload = _json_body(body)
+            return _json_response(
+                controller.set_ui_shell_preferences(
+                    sidebar_collapsed=_optional_bool(payload, "sidebar_collapsed"),
+                )
+            )
+        if method == "POST" and route == "/api/mark-notifications-read":
+            return _json_response(controller.mark_notifications_read())
         if method == "POST" and route == "/api/strategy-lab-selection":
             payload = _json_body(body)
             return _json_response(
@@ -342,6 +355,26 @@ def _json_response(
 def _optional_text(payload: Mapping[str, Any], key: str) -> str | None:
     value = payload.get(key)
     return None if value is None else str(value)
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_bool(payload: Mapping[str, Any], key: str) -> bool | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "collapsed"}
+    return bool(value)
 
 
 def _paper_report(controller: PaperDashboardController) -> str:
@@ -706,37 +739,80 @@ DASHBOARD_HTML = """<!doctype html>
   <title>ABTP Paper Trading Dashboard</title>
   <style>
     :root {
-      color-scheme: light;
-      --bg: #f4f7f8;
-      --panel: #ffffff;
-      --text: #172026;
-      --muted: #62717a;
-      --line: #d8e0e4;
-      --good: #0f7b52;
-      --warn: #9a5b00;
-      --bad: #b3261e;
-      --accent: #1264a3;
+      color-scheme: dark;
+      --bg: #06111a;
+      --bg-2: #081823;
+      --panel: #0b1a26;
+      --panel-soft: #0e2230;
+      --text: #e8f1fb;
+      --muted: #91a5b8;
+      --line: #1d3444;
+      --line-strong: #2b4d62;
+      --good: #32d583;
+      --warn: #ffb84d;
+      --bad: #ff5c5c;
+      --accent: #2f81ff;
+      --accent-2: #7c5cff;
+      --teal: #20c7b5;
+      --gold: #f2b84b;
+      --good-bg: rgba(23, 178, 106, 0.14);
+      --warn-bg: rgba(255, 184, 77, 0.14);
+      --bad-bg: rgba(255, 92, 92, 0.13);
+      --accent-bg: rgba(47, 129, 255, 0.16);
+      --shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       font-family: Inter, Segoe UI, Arial, sans-serif;
-      background: var(--bg);
+      background:
+        radial-gradient(circle at top left, rgba(47, 129, 255, 0.14), transparent 320px),
+        linear-gradient(180deg, #07131d 0, var(--bg) 44%, #041018 100%);
       color: var(--text);
+      min-width: 320px;
     }
     header {
       display: flex;
       justify-content: space-between;
       align-items: center;
       gap: 16px;
-      padding: 18px 24px;
+      min-height: 92px;
+      padding: 14px 26px;
       border-bottom: 1px solid var(--line);
-      background: var(--panel);
+      background: rgba(5, 16, 24, 0.96);
+      backdrop-filter: blur(16px);
       position: sticky;
       top: 0;
-      z-index: 2;
+      z-index: 10;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.26);
     }
-    h1 { font-size: 22px; margin: 0; letter-spacing: 0; }
+    h1 { font-size: 27px; margin: 0; letter-spacing: 0; line-height: 1; }
+    .app-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+    .app-mark {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      display: inline-grid;
+      place-items: center;
+      flex: 0 0 auto;
+      color: white;
+      font-weight: 900;
+      background:
+        linear-gradient(135deg, rgba(47, 129, 255, 0.95), rgba(32, 199, 181, 0.75));
+      box-shadow: 0 8px 18px rgba(18, 100, 163, 0.2);
+    }
+    .app-kicker {
+      color: var(--muted);
+      font-size: 0.68rem;
+      font-weight: 800;
+      line-height: 1.2;
+      text-transform: uppercase;
+    }
     .header-tools {
       display: flex;
       align-items: center;
@@ -744,12 +820,29 @@ DASHBOARD_HTML = """<!doctype html>
       flex-wrap: wrap;
     }
     .mode-selector {
-      display: inline-grid;
-      grid-template-columns: repeat(3, minmax(112px, 1fr));
-      border: 1px solid var(--line);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--line-strong);
       border-radius: 8px;
-      overflow: hidden;
-      background: #eef3f5;
+      background: rgba(14, 34, 48, 0.86);
+      padding: 5px 8px;
+    }
+    .mode-select-label {
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+    .mode-select {
+      min-width: 178px;
+      min-height: 32px;
+      border: 0;
+      border-radius: 6px;
+      background: #112737;
+      color: var(--text);
+      font-weight: 800;
+      padding: 5px 30px 5px 9px;
     }
     .mode-button {
       min-height: 34px;
@@ -759,28 +852,173 @@ DASHBOARD_HTML = """<!doctype html>
       background: transparent;
       color: var(--text);
       padding: 7px 10px;
+      font-weight: 750;
     }
     .mode-button:last-child { border-right: 0; }
     .mode-button.active {
-      background: var(--accent);
+      background: linear-gradient(135deg, var(--accent), var(--teal));
       color: white;
+    }
+    .market-strip {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(120px, 1fr));
+      gap: 10px;
+      max-width: 1640px;
+      margin: 0 auto 14px;
+      padding: 0 16px;
+    }
+    .market-pill {
+      display: grid;
+      gap: 3px;
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: linear-gradient(180deg, rgba(14, 34, 48, 0.96), rgba(9, 24, 35, 0.96));
+      padding: 9px 11px;
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
+    }
+    .market-pill span:first-child {
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+    .market-pill strong {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 0.98rem;
+    }
+    .dashboard-shell {
+      display: grid;
+      grid-template-columns: 178px minmax(0, 1fr);
+      min-height: calc(100vh - 92px);
+    }
+    .sidebar {
+      position: sticky;
+      top: 92px;
+      align-self: start;
+      height: calc(100vh - 92px);
+      border-right: 1px solid var(--line);
+      background: rgba(5, 16, 24, 0.9);
+      padding: 16px 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .side-nav {
+      display: grid;
+      gap: 8px;
+      padding: 0 8px;
+    }
+    .side-link {
+      min-height: 56px;
+      width: 100%;
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--muted);
+      text-align: left;
+      padding: 10px 12px;
+      box-shadow: none;
+    }
+    .side-link.active {
+      color: #d8eaff;
+      border-color: rgba(47, 129, 255, 0.5);
+      background: linear-gradient(90deg, rgba(47, 129, 255, 0.32), rgba(47, 129, 255, 0.08));
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+    .side-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 7px;
+      display: inline-grid;
+      place-items: center;
+      border: 1px solid var(--line-strong);
+      color: #9ecbff;
+      font-weight: 900;
+      font-size: 0.8rem;
+    }
+    .side-copy {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+    }
+    .side-copy strong,
+    .side-copy span {
+      overflow: visible;
+      text-overflow: clip;
+      white-space: normal;
+    }
+    .side-copy strong { color: inherit; font-size: 0.94rem; }
+    .side-copy span { color: var(--muted); font-size: 0.78rem; }
+    .collapse-note {
+      color: var(--muted);
+      padding: 10px 22px;
+      font-size: 0.86rem;
+    }
+    .dashboard-content {
+      min-width: 0;
+      padding: 16px 0 0;
     }
     main {
       display: grid;
       grid-template-columns: repeat(12, 1fr);
-      gap: 16px;
-      padding: 18px;
-      max-width: 1440px;
+      grid-auto-flow: dense;
+      gap: 14px;
+      padding: 0 16px 18px;
+      max-width: 1640px;
       margin: 0 auto;
     }
     section {
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 8px;
-      padding: 16px;
+      padding: 14px;
       min-width: 0;
+      box-shadow: var(--shadow);
+      overflow: auto;
+      scrollbar-gutter: stable;
     }
-    h2 { margin: 0 0 12px; font-size: 16px; letter-spacing: 0; }
+    section[data-view~="advanced_trader"] {
+      border-top: 3px solid color-mix(in srgb, var(--accent) 70%, white);
+    }
+    section[data-view~="beginner"] {
+      border-top: 3px solid color-mix(in srgb, var(--good) 72%, white);
+    }
+    section[data-view~="strategy_lab"] {
+      border-top: 3px solid color-mix(in srgb, var(--accent-2) 72%, white);
+    }
+    h2 {
+      margin: 0 0 12px;
+      font-size: 15px;
+      letter-spacing: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    h2::before {
+      content: "";
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      background: var(--accent);
+      box-shadow: 0 0 0 4px var(--accent-bg);
+      flex: 0 0 auto;
+    }
+    section[data-view~="beginner"] h2::before {
+      background: var(--good);
+      box-shadow: 0 0 0 4px var(--good-bg);
+    }
+    section[data-view~="strategy_lab"] h2::before {
+      background: var(--accent-2);
+      box-shadow: 0 0 0 4px #efe9ff;
+    }
     .span-3 { grid-column: span 3; }
     .span-4 { grid-column: span 4; }
     .span-5 { grid-column: span 5; }
@@ -798,32 +1036,95 @@ DASHBOARD_HTML = """<!doctype html>
       padding: 4px 10px;
       font-weight: 700;
       font-size: 13px;
+      background: var(--panel-soft);
     }
     .good { color: var(--good); }
     .warn { color: var(--warn); }
     .bad { color: var(--bad); }
-    dl { display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; margin: 0; }
-    dt { color: var(--muted); }
-    dd { margin: 0; font-weight: 650; text-align: right; overflow-wrap: anywhere; }
+    dl {
+      display: grid;
+      grid-template-columns: minmax(108px, 0.75fr) minmax(0, 1.25fr);
+      gap: 8px 12px;
+      margin: 0;
+    }
+    dt { color: var(--muted); min-width: 0; }
+    dd {
+      margin: 0;
+      font-weight: 700;
+      text-align: right;
+      overflow-wrap: anywhere;
+      min-width: 0;
+      line-height: 1.35;
+    }
+    .value-chip {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      max-width: 100%;
+      min-width: 0;
+      min-height: 24px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      padding: 2px 8px;
+      background: #102433;
+      color: var(--text);
+      font-size: 0.88rem;
+      font-weight: 800;
+      overflow-wrap: anywhere;
+      text-align: center;
+      white-space: normal;
+    }
+    .value-good { background: var(--good-bg); border-color: #b8e4cf; color: var(--good); }
+    .value-warn { background: var(--warn-bg); border-color: #f3d48a; color: var(--warn); }
+    .value-bad { background: var(--bad-bg); border-color: #f2bbb4; color: var(--bad); }
+    .value-accent { background: var(--accent-bg); border-color: #bfd8f3; color: var(--accent); }
+    .value-muted { color: var(--muted); font-weight: 700; }
+    .metric-negative { color: var(--bad); }
+    .metric-positive { color: var(--good); }
     .controls { display: flex; flex-wrap: wrap; gap: 10px; }
     button, a.button {
-      min-height: 38px;
+      min-height: 36px;
       border: 1px solid var(--accent);
       border-radius: 6px;
       background: var(--accent);
       color: white;
-      padding: 8px 12px;
+      padding: 8px 11px;
       font-weight: 700;
       cursor: pointer;
       text-decoration: none;
+      box-shadow: 0 4px 12px rgba(18, 100, 163, 0.12);
     }
-    button.secondary { background: white; color: var(--accent); }
+    button.secondary { background: transparent; color: #9ecbff; box-shadow: none; }
     button.danger { background: var(--bad); border-color: var(--bad); }
     button:disabled {
-      background: #d9dee2;
-      border-color: #c7ced3;
-      color: #69757d;
+      background: #1c2b36;
+      border-color: #263a49;
+      color: #718697;
       cursor: not-allowed;
+    }
+    button.side-link,
+    a.side-link {
+      min-height: 56px;
+      width: 100%;
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--muted);
+      text-align: left;
+      padding: 10px 12px;
+      box-shadow: none;
+      text-decoration: none;
+    }
+    button.side-link.active,
+    a.side-link.active {
+      color: #d8eaff;
+      border-color: rgba(47, 129, 255, 0.5);
+      background: linear-gradient(90deg, rgba(47, 129, 255, 0.32), rgba(47, 129, 255, 0.08));
+      box-shadow: inset 3px 0 0 var(--accent);
     }
     ul { margin: 0; padding-left: 18px; }
     li { margin-bottom: 6px; }
@@ -833,10 +1134,14 @@ DASHBOARD_HTML = """<!doctype html>
       border-top: 1px solid var(--line);
       padding-top: 10px;
     }
+    section:has(table) {
+      max-height: min(72vh, 760px);
+    }
     table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 0.92rem;
+      font-size: 0.88rem;
+      min-width: 560px;
     }
     .depth-grid {
       display: grid;
@@ -865,14 +1170,14 @@ DASHBOARD_HTML = """<!doctype html>
       align-items: center;
       border: 1px solid var(--line);
       border-radius: 6px;
-      background: white;
+      background: #0d202e;
       color: var(--text);
       margin-bottom: 8px;
       text-align: left;
     }
     .watchlist-row.active {
       border-color: var(--accent);
-      background: #eef7fc;
+      background: rgba(47, 129, 255, 0.16);
     }
     .watchlist-symbol { font-weight: 800; }
     .watchlist-note {
@@ -890,18 +1195,23 @@ DASHBOARD_HTML = """<!doctype html>
       border-left: 4px solid var(--warn);
       border-radius: 6px;
       padding: 8px 10px;
-      background: #fffaf0;
+      background: var(--warn-bg);
     }
     th, td {
       border-bottom: 1px solid var(--line);
-      padding: 9px 8px;
+      padding: 8px 7px;
       text-align: left;
       overflow-wrap: anywhere;
+      vertical-align: top;
     }
     th {
       color: var(--muted);
-      font-size: 0.8rem;
+      font-size: 0.76rem;
       text-transform: uppercase;
+      background: #102433;
+      position: sticky;
+      top: 0;
+      z-index: 1;
     }
     .empty {
       color: var(--muted);
@@ -910,19 +1220,22 @@ DASHBOARD_HTML = """<!doctype html>
     .warning {
       color: var(--bad);
       font-weight: 700;
+      background: var(--bad-bg);
+      border-color: rgba(255, 92, 92, 0.4);
     }
     .command-label {
-      font-size: 1.35rem;
+      font-size: 1.45rem;
       font-weight: 800;
       margin-bottom: 10px;
+      color: var(--good);
     }
     .chart-canvas {
       display: block;
       width: 100%;
-      height: 320px;
+      height: 360px;
       border: 1px solid var(--line);
       border-radius: 6px;
-      background: #fbfcfd;
+      background: linear-gradient(180deg, #071722 0, #091e2a 100%);
     }
     .chart-toolbar {
       display: flex;
@@ -937,10 +1250,11 @@ DASHBOARD_HTML = """<!doctype html>
       border: 1px solid var(--line);
       border-radius: 6px;
       overflow: hidden;
-      background: #eef3f5;
+      background: #0d202e;
     }
     .chart-tool {
       min-height: 32px;
+      min-width: 36px;
       border: 0;
       border-right: 1px solid var(--line);
       border-radius: 0;
@@ -948,6 +1262,7 @@ DASHBOARD_HTML = """<!doctype html>
       color: var(--text);
       padding: 6px 9px;
       font-size: 0.85rem;
+      box-shadow: none;
     }
     .chart-tool:last-child { border-right: 0; }
     .chart-tool.active {
@@ -964,8 +1279,8 @@ DASHBOARD_HTML = """<!doctype html>
       min-width: 184px;
       border: 1px solid var(--line);
       border-radius: 6px;
-      background: rgba(255, 255, 255, 0.96);
-      box-shadow: 0 6px 16px rgba(23, 32, 38, 0.12);
+      background: rgba(8, 24, 35, 0.96);
+      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.24);
       padding: 8px 10px;
       font-size: 0.82rem;
       line-height: 1.45;
@@ -980,7 +1295,7 @@ DASHBOARD_HTML = """<!doctype html>
     }
     .selector-grid {
       display: grid;
-      grid-template-columns: repeat(5, minmax(120px, 1fr));
+      grid-template-columns: repeat(5, minmax(128px, 1fr));
       gap: 10px;
       margin-bottom: 14px;
     }
@@ -1001,50 +1316,1169 @@ DASHBOARD_HTML = """<!doctype html>
       min-height: 36px;
       border: 1px solid var(--line);
       border-radius: 6px;
-      background: white;
+      background: #0d202e;
       color: var(--text);
       padding: 6px 8px;
       font: inherit;
+    }
+    select:focus, input:focus, textarea:focus, button:focus-visible, a.button:focus-visible {
+      outline: 3px solid rgba(18, 100, 163, 0.2);
+      outline-offset: 2px;
     }
     textarea {
       min-height: 76px;
       resize: vertical;
     }
     [hidden] { display: none !important; }
-    @media (max-width: 900px) {
-      main { grid-template-columns: 1fr; padding: 12px; }
+    body.mode-beginner main {
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      align-items: start;
+      gap: 14px;
+      padding: 0 16px 18px;
+      max-width: 1480px;
+    }
+    body.mode-beginner .market-strip {
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+      padding: 0 10px;
+    }
+    body.mode-beginner .market-pill {
+      padding: 7px 9px;
+    }
+    body.mode-beginner .market-pill span:first-child {
+      font-size: 0.68rem;
+    }
+    body.mode-beginner .market-pill strong {
+      font-size: 0.88rem;
+    }
+    body.mode-beginner section[data-view~="beginner"] {
+      padding: 14px;
+      font-size: 0.92rem;
+      box-shadow: var(--shadow);
+    }
+    body.mode-beginner section:has(#beginner_command) {
+      grid-column: span 4;
+      min-height: 280px;
+    }
+    body.mode-beginner section:has(#strategy) {
+      grid-column: span 4;
+      min-height: 280px;
+    }
+    body.mode-beginner section:has(#portfolio) {
+      grid-column: span 4;
+      min-height: 280px;
+    }
+    body.mode-beginner section:has(#approval_reason) {
+      grid-column: span 8;
+      min-height: 198px;
+    }
+    body.mode-beginner section:has(#transactions) {
+      grid-column: span 4;
+      min-height: 198px;
+    }
+    body.mode-beginner section:has(#explanation) { grid-column: span 8; }
+    body.mode-beginner section:has(#readiness_gate),
+    body.mode-beginner section:has(#glossary) { grid-column: span 6; }
+    body.mode-advanced_trader section,
+    body.mode-strategy_lab section { order: 30; }
+    body.mode-advanced_trader section:has(#beginner_command),
+    body.mode-strategy_lab section:has(#beginner_command) {
+      order: 1;
+      grid-column: span 4;
+      min-height: 280px;
+      border-color: rgba(47, 129, 255, 0.72);
+      box-shadow: 0 0 0 1px rgba(47, 129, 255, 0.28), var(--shadow);
+    }
+    body.mode-advanced_trader section:has(#strategy),
+    body.mode-strategy_lab section:has(#strategy) {
+      order: 2;
+      grid-column: span 4;
+      min-height: 280px;
+    }
+    body.mode-advanced_trader section:has(#portfolio),
+    body.mode-strategy_lab section:has(#portfolio) {
+      order: 3;
+      grid-column: span 4;
+      min-height: 280px;
+    }
+    body.mode-advanced_trader section:has(#approval_reason),
+    body.mode-strategy_lab section:has(#approval_reason) { order: 4; grid-column: span 8; }
+    body.mode-advanced_trader section:has(#transactions),
+    body.mode-strategy_lab section:has(#transactions) { order: 5; grid-column: span 4; }
+    body.mode-advanced_trader section:has(#explanation),
+    body.mode-strategy_lab section:has(#explanation) { order: 6; grid-column: span 8; }
+    body.mode-advanced_trader section:has(#readiness_gate),
+    body.mode-strategy_lab section:has(#readiness_gate) { order: 7; grid-column: span 6; }
+    body.mode-advanced_trader section:has(#glossary),
+    body.mode-strategy_lab section:has(#glossary) { order: 8; grid-column: span 6; }
+    body.mode-advanced_trader section:has(#price_chart),
+    body.mode-strategy_lab section:has(#price_chart) { order: 20; }
+    body.mode-advanced_trader section[data-view~="advanced_trader"],
+    body.mode-strategy_lab section[data-view~="advanced_trader"] { order: 24; }
+    body.mode-advanced_trader section:has(#warning),
+    body.mode-strategy_lab section:has(#warning) { order: 80; }
+    body.mode-beginner section[data-view~="beginner"] h2 {
+      margin-bottom: 8px;
+      font-size: 13px;
+    }
+    body.mode-beginner section[data-view~="beginner"] h2::before {
+      width: 7px;
+      height: 7px;
+      box-shadow: 0 0 0 3px var(--good-bg);
+    }
+    body.mode-beginner section[data-view~="beginner"] dl {
+      grid-template-columns: minmax(82px, 0.85fr) minmax(0, 1.15fr);
+      gap: 5px 8px;
+    }
+    body.mode-beginner section[data-view~="beginner"] dt,
+    body.mode-beginner section[data-view~="beginner"] dd,
+    body.mode-beginner section[data-view~="beginner"] li,
+    body.mode-beginner section[data-view~="beginner"] p {
+      line-height: 1.25;
+    }
+    body.mode-beginner section[data-view~="beginner"] table {
+      font-size: 0.78rem;
+      min-width: 520px;
+    }
+    body.mode-beginner section[data-view~="beginner"] th,
+    body.mode-beginner section[data-view~="beginner"] td {
+      padding: 5px 6px;
+    }
+    body.mode-beginner .command-label {
+      font-size: 1.05rem;
+      margin-bottom: 6px;
+    }
+    body.mode-beginner .controls {
+      gap: 7px;
+    }
+    body.mode-beginner button,
+    body.mode-beginner a.button {
+      min-height: 32px;
+      padding: 6px 9px;
+      font-size: 0.82rem;
+    }
+    body.mode-beginner #approval_reason {
+      margin: 8px 0 0;
+      font-size: 0.82rem;
+      line-height: 1.25;
+    }
+    body.mode-beginner section:has(#beginner_command) {
+      order: 1;
+      border-color: rgba(47, 129, 255, 0.72);
+      box-shadow: 0 0 0 1px rgba(47, 129, 255, 0.28), var(--shadow);
+    }
+    body.mode-beginner section:has(#strategy) { order: 2; }
+    body.mode-beginner section:has(#portfolio) { order: 3; }
+    body.mode-beginner section:has(#approval_reason) { order: 4; }
+    body.mode-beginner section:has(#transactions) { order: 5; }
+    body.mode-beginner section:has(#explanation) { order: 6; }
+    body.mode-beginner section:has(#readiness_gate) { order: 7; }
+    body.mode-beginner section:has(#glossary) { order: 8; }
+    body.mode-beginner #warning {
+      order: 9;
+      grid-column: 1 / -1;
+      min-height: 36px;
+      padding: 8px 10px;
+    }
+    .status-footer {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(120px, 1fr));
+      gap: 0;
+      border-top: 1px solid var(--line);
+      background: rgba(5, 16, 24, 0.96);
+      margin-top: 2px;
+    }
+    .footer-item {
+      display: grid;
+      grid-template-columns: 30px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+      min-height: 68px;
+      padding: 10px 18px;
+      border-right: 1px solid var(--line);
+    }
+    .footer-item:last-child { border-right: 0; }
+    .footer-icon {
+      width: 28px;
+      height: 28px;
+      border: 1px solid var(--line-strong);
+      border-radius: 7px;
+      display: inline-grid;
+      place-items: center;
+      color: #9ecbff;
+      font-weight: 900;
+    }
+    .footer-item strong {
+      display: block;
+      color: var(--text);
+      font-size: 0.84rem;
+      text-transform: uppercase;
+    }
+    .footer-item span {
+      color: var(--muted);
+      font-size: 0.84rem;
+    }
+    /* Reference UI ready pass */
+    .topbar {
+      display: grid;
+      grid-template-columns:
+        172px 174px minmax(160px, 1fr) minmax(220px, 1.05fr)
+        150px 168px 146px 56px;
+      gap: 0;
+      align-items: stretch;
+      min-height: 106px;
+      padding: 0;
+      background: #07131d;
+    }
+    .brand-cluster,
+    .pair-tile,
+    .top-metric,
+    .notification-bell {
+      min-width: 0;
+      border-right: 1px solid var(--line);
+      padding: 16px 18px;
+      display: flex;
+      align-items: center;
+    }
+    .brand-cluster {
+      gap: 12px;
+    }
+    .brand-cluster .app-mark {
+      width: 40px;
+      height: 40px;
+      border-radius: 12px;
+      font-size: 0;
+      position: relative;
+    }
+    .brand-cluster .app-mark::before {
+      content: "AB";
+      font-size: 13px;
+      letter-spacing: 0;
+    }
+    .brand-cluster h1 {
+      font-size: 31px;
+      line-height: 0.92;
+    }
+    .brand-cluster .app-kicker {
+      margin-top: 6px;
+      font-size: 9px;
+      color: #c5d4e7;
+    }
+    .pair-tile {
+      gap: 14px;
+    }
+    .coin-mark {
+      width: 44px;
+      height: 44px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+      background: linear-gradient(135deg, #ffb13d, #f7931a);
+      color: white;
+      font-weight: 900;
+      box-shadow: 0 0 0 6px rgba(247, 147, 26, 0.12);
+    }
+    .pair-tile strong {
+      display: block;
+      font-size: 16px;
+      line-height: 1.15;
+    }
+    .pair-tile span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .top-metric {
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: center;
+      gap: 5px;
+    }
+    .top-metric > span {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .top-metric > strong {
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 15px;
+      line-height: 1.15;
+    }
+    .price-metric strong {
+      font-size: 25px;
+      color: #f6fbff;
+    }
+    .top-metric small {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.2;
+    }
+    .top-metric small.good,
+    .top-metric small .good {
+      color: var(--good);
+    }
+    .status-pill,
+    .connection-pill,
+    .mode-select {
+      min-height: 34px;
+      border-radius: 8px;
+      padding: 6px 12px;
+      border: 1px solid rgba(47, 129, 255, 0.34);
+      background: rgba(47, 129, 255, 0.2);
+      color: #dfefff;
+      font-weight: 900;
+      text-transform: uppercase;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      max-width: 100%;
+    }
+    .status-pill::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: currentColor;
+      flex: 0 0 auto;
+    }
+    .status-pill.good {
+      border-color: rgba(50, 213, 131, 0.5);
+      background: rgba(50, 213, 131, 0.16);
+      color: var(--good);
+    }
+    .status-pill.bad {
+      border-color: rgba(255, 92, 92, 0.5);
+      background: rgba(255, 92, 92, 0.16);
+      color: var(--bad);
+    }
+    .status-pill.warn {
+      border-color: rgba(255, 184, 77, 0.5);
+      background: rgba(255, 184, 77, 0.16);
+      color: var(--warn);
+    }
+    .connection-pill {
+      border-color: rgba(50, 213, 131, 0.28);
+      background: rgba(50, 213, 131, 0.12);
+      color: var(--good);
+      font-size: 13px;
+    }
+    .connection-pill.good {
+      border-color: rgba(50, 213, 131, 0.5);
+      background: rgba(50, 213, 131, 0.16);
+      color: var(--good);
+    }
+    .connection-pill.warn {
+      border-color: rgba(255, 184, 77, 0.5);
+      background: rgba(255, 184, 77, 0.16);
+      color: var(--warn);
+    }
+    .mode-select {
+      min-width: 0;
+      width: 100%;
+      border: 0;
+      background: #1558d6;
+      color: white;
+      cursor: pointer;
+    }
+    .mode-metric small {
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+    }
+    .mode-metric small b {
+      font-size: 9px;
+      color: var(--muted);
+    }
+    .notification-bell {
+      justify-content: center;
+      position: relative;
+      background: transparent;
+      border-top: 0;
+      border-bottom: 0;
+      border-left: 0;
+      border-radius: 0;
+      box-shadow: none;
+      color: #dce8f7;
+      padding: 0;
+    }
+    .notification-bell span {
+      width: 44px;
+      height: 44px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line-strong);
+      border-radius: 999px;
+      background: rgba(14, 34, 48, 0.72);
+      font-weight: 900;
+    }
+    .notification-bell strong {
+      position: absolute;
+      top: 26px;
+      right: 17px;
+      min-width: 18px;
+      height: 18px;
+      display: grid;
+      place-items: center;
+      border-radius: 999px;
+      background: var(--accent);
+      color: white;
+      font-size: 10px;
+      line-height: 1;
+    }
+    .dashboard-shell {
+      grid-template-columns: 196px minmax(0, 1fr);
+    }
+    body.sidebar-collapsed .dashboard-shell {
+      grid-template-columns: 76px minmax(0, 1fr);
+    }
+    body.sidebar-collapsed .side-copy,
+    body.sidebar-collapsed .collapse-note {
+      font-size: 0;
+    }
+    body.sidebar-collapsed .side-link {
+      grid-template-columns: 1fr;
+      justify-items: center;
+      padding-inline: 8px;
+    }
+    .sidebar {
+      top: 106px;
+      height: calc(100vh - 106px);
+      padding: 16px 0 24px;
+      background: #07131d;
+    }
+    .side-nav {
+      gap: 10px;
+      padding: 0 10px;
+    }
+    button.side-link,
+    a.side-link {
+      min-height: 56px;
+      border-radius: 8px;
+      color: #a9b8cb;
+    }
+    .side-icon {
+      border: 0;
+      background: transparent;
+      color: #9db7d6;
+      font-size: 0.76rem;
+    }
+    button.side-link.active,
+    a.side-link.active {
+      background: linear-gradient(90deg, rgba(47, 129, 255, 0.42), rgba(47, 129, 255, 0.13));
+      border-color: rgba(47, 129, 255, 0.36);
+      color: #7fbdff;
+    }
+    .collapse-note {
+      min-height: 38px;
+      margin: 0 10px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      box-shadow: none;
+      text-align: left;
+    }
+    .dashboard-content {
+      padding-top: 22px;
+      overflow-x: auto;
+    }
+    main {
+      max-width: 1328px;
+      min-width: 1120px;
+      gap: 16px;
+      padding: 0 20px 18px;
+    }
+    section {
+      background: rgba(9, 22, 33, 0.96);
+      border-color: #223747;
+      box-shadow: none;
+      overflow: hidden;
+    }
+    section[data-view~="beginner"],
+    section[data-view~="advanced_trader"],
+    section[data-view~="strategy_lab"] {
+      border-top: 1px solid #223747;
+    }
+    h2 {
+      justify-content: space-between;
+      text-transform: uppercase;
+      letter-spacing: 0;
+      color: #f2f7ff;
+    }
+    h2::before {
+      display: none;
+    }
+    .recommendation-card {
+      min-height: 344px;
+      border-color: rgba(47, 129, 255, 0.86);
+      box-shadow: inset 0 0 0 1px rgba(47, 129, 255, 0.2);
+    }
+    .recommendation-card .command-label {
+      margin: 28px 0 12px;
+      text-align: center;
+      font-size: 80px;
+      line-height: 0.95;
+      color: #2f8cff;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+    .confidence-pill {
+      width: max-content;
+      max-width: 100%;
+      margin: 0 auto 26px;
+      border: 1px solid rgba(47, 129, 255, 0.8);
+      border-radius: 999px;
+      padding: 8px 18px;
+      color: #79bdff;
+      background: rgba(47, 129, 255, 0.08);
+      font-weight: 900;
+      font-size: 17px;
+    }
+    .command-summary {
+      display: grid;
+      grid-template-columns: 1fr 136px;
+      gap: 18px;
+      border-top: 1px solid var(--line);
+      padding-top: 18px;
+    }
+    .command-summary > div + div {
+      border-left: 1px solid var(--line);
+      padding-left: 18px;
+    }
+    .command-summary span {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--muted);
+      text-transform: uppercase;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .command-summary p {
+      margin: 0;
+      color: #f4f8ff;
+      line-height: 1.5;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .command-summary strong {
+      color: #69b7ff;
+      font-size: 23px;
+    }
+    .detail-dl {
+      display: none;
+    }
+    .why-card {
+      grid-column: span 3;
+      min-height: 344px;
+      padding: 0;
+    }
+    .why-card h2 {
+      min-height: 56px;
+      margin: 0;
+      padding: 0 18px;
+      border-bottom: 1px solid var(--line);
+      align-items: center;
+    }
+    .why-list {
+      display: grid;
+    }
+    .why-row {
+      display: grid;
+      grid-template-columns: 30px minmax(0, 1fr) 22px;
+      gap: 12px;
+      align-items: center;
+      min-height: 52px;
+      padding: 8px 18px;
+      border-bottom: 1px solid var(--line);
+    }
+    .why-row:last-child {
+      border-bottom: 0;
+    }
+    .why-icon,
+    .why-info {
+      width: 25px;
+      height: 25px;
+      display: grid;
+      place-items: center;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 900;
+    }
+    .why-icon.good { background: rgba(50, 213, 131, 0.18); color: var(--good); }
+    .why-icon.warn { background: rgba(255, 184, 77, 0.18); color: var(--warn); }
+    .why-info {
+      border: 1px solid var(--line-strong);
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .portfolio-card {
+      min-height: 344px;
+    }
+    .portfolio-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .portfolio-grid article {
+      position: relative;
+      min-height: 136px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(14, 34, 48, 0.68);
+      padding: 18px 14px;
+      display: grid;
+      align-content: start;
+      gap: 8px;
+      overflow: hidden;
+    }
+    .portfolio-grid article::after {
+      position: absolute;
+      top: 12px;
+      right: 10px;
+      width: 22px;
+      height: 22px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      font-size: 13px;
+      font-weight: 900;
+      background: var(--accent-bg);
+      color: var(--accent);
+    }
+    .portfolio-grid article:nth-child(1)::after { content: "\\25A6"; }
+    .portfolio-grid article:nth-child(2)::after {
+      content: "$";
+      background: var(--good-bg);
+      color: var(--good);
+    }
+    .portfolio-grid article:nth-child(3)::after {
+      content: "\\20BF";
+      background: rgba(247, 147, 26, 0.16);
+      color: #f7931a;
+    }
+    .portfolio-grid article:nth-child(4)::after {
+      content: "\\2197";
+      background: var(--good-bg);
+      color: var(--good);
+    }
+    .portfolio-grid span {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+      max-width: calc(100% - 28px);
+    }
+    .portfolio-grid strong {
+      color: #f4f8ff;
+      font-size: clamp(18px, 1.55vw, 25px);
+      line-height: 1.1;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .portfolio-grid small {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.25;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .portfolio-grid i {
+      height: 22px;
+      border-radius: 999px;
+      opacity: 0.8;
+      background:
+        linear-gradient(
+          135deg,
+          transparent 0 18%,
+          rgba(50, 213, 131, 0.5) 18% 22%,
+          transparent 22% 42%,
+          rgba(50, 213, 131, 0.45) 42% 47%,
+          transparent 47% 65%,
+          rgba(50, 213, 131, 0.55) 65% 70%,
+          transparent 70%
+        );
+    }
+    .controls-card {
+      min-height: 224px;
+    }
+    .control-tiles {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .action-tile {
+      min-height: 74px;
+      display: grid;
+      grid-template-columns: 30px minmax(0, 1fr);
+      align-items: center;
+      gap: 4px 12px;
+      border-radius: 8px;
+      padding: 12px 18px;
+      background: rgba(14, 34, 48, 0.8);
+      box-shadow: none;
+      text-align: left;
+    }
+    .action-tile::before {
+      grid-row: 1 / 3;
+      width: 26px;
+      height: 26px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      font-weight: 900;
+      font-size: 13px;
+      background: currentColor;
+      box-shadow: inset 0 0 0 26px rgba(0, 0, 0, 0.55);
+      color: inherit;
+    }
+    .approve-tile::before { content: "\\2713"; }
+    .reject-tile::before { content: "\\2715"; }
+    .pause-tile::before { content: "\\275A\\275A"; font-size: 10px; }
+    .danger-tile::before { content: "\\26A0"; }
+    .action-tile strong {
+      font-size: 16px;
+      text-transform: uppercase;
+    }
+    .action-tile span {
+      color: #f2f7ff;
+      font-weight: 500;
+    }
+    .approve-tile {
+      border-color: rgba(50, 213, 131, 0.5);
+      color: var(--good);
+      background: rgba(50, 213, 131, 0.11);
+    }
+    .reject-tile {
+      border-color: rgba(255, 92, 92, 0.5);
+      color: var(--bad);
+      background: rgba(255, 92, 92, 0.11);
+    }
+    .pause-tile {
+      border-color: rgba(255, 184, 77, 0.5);
+      color: var(--warn);
+      background: rgba(255, 184, 77, 0.11);
+    }
+    .danger-tile {
+      border-color: rgba(255, 92, 92, 0.56);
+      color: #ff6b72;
+      background: rgba(255, 92, 92, 0.13);
+    }
+    .compact-action {
+      min-height: 34px;
+      justify-content: center;
+    }
+    #approval_reason {
+      margin: 16px 0 0;
+      color: var(--muted);
+    }
+    .ai-card {
+      grid-column: span 7;
+      min-height: 206px;
+    }
+    .ai-body {
+      display: grid;
+      grid-template-columns: 112px minmax(0, 1fr);
+      gap: 20px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .bot-avatar {
+      width: 80px;
+      height: 80px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      justify-self: center;
+      border: 1px solid var(--line-strong);
+      background: radial-gradient(circle, #1a74dc, #0d2638);
+      color: #dff0ff;
+      font-weight: 900;
+    }
+    .ai-card ul {
+      padding-left: 0;
+      list-style: none;
+      line-height: 1.55;
+    }
+    .ai-meta {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .ai-meta b {
+      border-radius: 999px;
+      padding: 2px 9px;
+      background: rgba(50, 213, 131, 0.14);
+      color: var(--good);
+    }
+    .activity-card {
+      grid-column: span 5;
+      min-height: 224px;
+    }
+    .text-link {
+      min-height: 0;
+      border: 0;
+      background: transparent;
+      color: #62adff;
+      padding: 0;
+      box-shadow: none;
+      font-size: 13px;
+    }
+    .activity-timeline ul {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: 12px;
+    }
+    .activity-card .activity-timeline {
+      max-height: 142px;
+      overflow: hidden;
+    }
+    .activity-row {
+      display: grid;
+      grid-template-columns: 86px 28px minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: start;
+      color: #d9e5f5;
+    }
+    .activity-time {
+      color: var(--muted);
+      font-size: 12px;
+      padding-top: 4px;
+    }
+    .activity-dot {
+      width: 24px;
+      height: 24px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line-strong);
+      color: #62adff;
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .activity-copy strong {
+      display: block;
+      margin-bottom: 3px;
+    }
+    .activity-copy span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .activity-tag {
+      border-radius: 5px;
+      padding: 5px 8px;
+      background: rgba(47, 129, 255, 0.16);
+      color: #69b7ff;
+      font-size: 11px;
+      font-weight: 900;
+    }
+    .activity-tag.action { background: rgba(255, 92, 92, 0.16); color: #ff6b72; }
+    .activity-tag.system { background: rgba(50, 213, 131, 0.14); color: var(--good); }
+    .activity-tag.warning { background: rgba(255, 184, 77, 0.14); color: var(--warn); }
+    body.mode-beginner section {
+      order: 30;
+    }
+    body.mode-beginner .recommendation-card {
+      order: 1;
+      grid-column: 1 / 5;
+      height: 344px;
+    }
+    body.mode-beginner .why-card {
+      order: 2;
+      grid-column: 5 / 8;
+      height: 344px;
+    }
+    body.mode-beginner .portfolio-card {
+      order: 3;
+      grid-column: 8 / 13;
+      height: 344px;
+    }
+    body.mode-beginner .controls-card {
+      order: 4;
+      grid-column: 1 / 8;
+      height: 224px;
+    }
+    body.mode-beginner .activity-card {
+      order: 5;
+      grid-column: 8 / 13;
+      height: 224px;
+      grid-row: auto;
+    }
+    body.mode-beginner .ai-card {
+      order: 6;
+      grid-column: 1 / 13;
+    }
+    body.mode-beginner section:has(#risk_safety_summary) {
+      order: 8;
+      grid-column: span 6;
+    }
+    body.mode-beginner section:has(#runtime_telemetry) {
+      order: 9;
+      grid-column: span 6;
+    }
+    body.mode-beginner section:has(#transactions) {
+      order: 10;
+      grid-column: span 6;
+    }
+    body.mode-beginner section:has(#readiness_gate),
+    body.mode-beginner section:has(#glossary) {
+      order: 11;
+      grid-column: span 6;
+    }
+    .status-footer {
+      grid-template-columns: repeat(6, minmax(120px, 1fr));
+    }
+    body.mode-strategy_lab main {
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+    }
+    body.mode-strategy_lab section[data-view~="strategy_lab"] {
+      max-height: min(72vh, 740px);
+    }
+    @media (max-width: 1180px) {
+      .topbar {
+        position: static;
+        grid-template-columns:
+          172px 174px minmax(160px, 1fr) minmax(220px, 1.05fr)
+          150px 168px 146px 56px;
+        min-width: 1120px;
+      }
+      .brand-cluster,
+      .pair-tile,
+      .top-metric,
+      .notification-bell {
+        min-height: 86px;
+      }
+      main {
+        grid-template-columns: repeat(12, minmax(0, 1fr));
+        min-width: 1120px;
+        padding: 12px;
+      }
+      .market-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 0 12px; }
+      .dashboard-shell { grid-template-columns: 196px minmax(0, 1fr); }
+      .side-link { grid-template-columns: 28px minmax(0, 1fr); justify-items: stretch; }
+      .side-copy { display: grid; }
+      .collapse-note { display: block; }
+      .span-3, .span-4, .span-5,
+      .span-6 { grid-column: span 3; }
+      .span-7, .span-8, .span-12 { grid-column: span 6; }
+      body.mode-beginner main {
+        grid-template-columns: repeat(12, minmax(0, 1fr));
+      }
+      body.mode-advanced_trader section:has(#beginner_command),
+      body.mode-advanced_trader section:has(#strategy),
+      body.mode-advanced_trader section:has(#portfolio),
+      body.mode-advanced_trader section:has(#approval_reason),
+      body.mode-advanced_trader section:has(#transactions),
+      body.mode-advanced_trader section:has(#explanation),
+      body.mode-advanced_trader section:has(#readiness_gate),
+      body.mode-advanced_trader section:has(#glossary),
+      body.mode-strategy_lab section:has(#beginner_command),
+      body.mode-strategy_lab section:has(#strategy),
+      body.mode-strategy_lab section:has(#portfolio),
+      body.mode-strategy_lab section:has(#approval_reason),
+      body.mode-strategy_lab section:has(#transactions),
+      body.mode-strategy_lab section:has(#explanation),
+      body.mode-strategy_lab section:has(#readiness_gate),
+      body.mode-strategy_lab section:has(#glossary) { min-height: auto; }
+      .selector-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .status-footer { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      body.mode-beginner .activity-card { grid-row: auto; }
+    }
+    @media (max-width: 760px) {
+      .topbar {
+        grid-template-columns:
+          172px 174px minmax(160px, 1fr) minmax(220px, 1.05fr)
+          150px 168px 146px 56px;
+      }
+      .brand-cluster,
+      .pair-tile,
+      .top-metric,
+      .notification-bell {
+        min-height: 76px;
+        padding: 12px;
+      }
+      .price-metric strong {
+        font-size: 20px;
+      }
+      main {
+        grid-template-columns: repeat(12, minmax(0, 1fr));
+        min-width: 1120px;
+        padding: 10px;
+      }
+      .market-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 0 10px; }
+      .dashboard-shell { grid-template-columns: 196px minmax(0, 1fr); }
+      .sidebar {
+        position: sticky;
+        height: calc(100vh - 106px);
+        border-right: 1px solid var(--line);
+        border-bottom: 0;
+      }
+      .side-nav {
+        grid-template-columns: 1fr;
+      }
+      .side-link {
+        min-height: 48px;
+      }
       .span-3, .span-4, .span-5,
       .span-6, .span-7, .span-8,
-      .span-12 { grid-column: span 1; }
-      header { align-items: flex-start; flex-direction: column; }
-      .mode-selector { grid-template-columns: 1fr; width: 100%; }
+      .span-12 { grid-column: span 12; }
+      header { align-items: stretch; }
+      h1 { font-size: 18px; }
+      .header-tools { width: 100%; }
+      .mode-selector { width: 100%; }
+      .mode-select { flex: 1; min-width: 0; }
       .mode-button { border-right: 0; border-bottom: 1px solid var(--line); }
       .mode-button:last-child { border-bottom: 0; }
       .selector-grid { grid-template-columns: 1fr; }
       .ticket-grid { grid-template-columns: 1fr; }
       .depth-grid { grid-template-columns: 1fr; }
+      section { max-height: none; }
+      body.mode-beginner section[data-view~="beginner"] { max-height: none; }
       dl { grid-template-columns: 1fr; }
       dd { text-align: left; }
+      table { min-width: 520px; }
+      .status-footer { grid-template-columns: 1fr; }
+      .footer-item { border-right: 0; border-bottom: 1px solid var(--line); }
+    }
+    @media (max-width: 460px) {
+      .topbar {
+        grid-template-columns: 1fr;
+      }
+      .market-strip { grid-template-columns: 1fr; }
+      .badges { width: 100%; }
+      .badge { flex: 1 1 92px; justify-content: center; }
     }
   </style>
 </head>
-<body>
-  <header>
-    <h1>ABTP Paper Trading Dashboard</h1>
-    <div class="header-tools">
-      <div class="mode-selector" aria-label="Dashboard workspace">
-        <button class="mode-button" data-ui-mode="beginner">Beginner</button>
-        <button class="mode-button" data-ui-mode="advanced_trader">Advanced Trader</button>
-        <button class="mode-button" data-ui-mode="strategy_lab">Strategy Lab</button>
-      </div>
-      <div class="badges">
-        <span class="badge good" id="mode">PAPER MODE</span>
-        <span class="badge good" id="safe">SAFE MODE</span>
-        <span class="badge bad" id="live">LIVE OFF</span>
+<body data-dashboard-build="dropdown-labels-v1">
+  <header class="topbar">
+    <div class="brand-cluster">
+      <span class="app-mark" aria-hidden="true">A</span>
+      <div>
+        <h1>ABTP</h1>
+        <div class="app-kicker">AI Backtesting<br>Trading Platform</div>
       </div>
     </div>
+    <div class="pair-tile">
+      <span class="coin-mark" aria-hidden="true">B</span>
+      <div>
+        <strong id="strip_symbol">BTC/USDT</strong>
+        <span id="header_source">Binance</span>
+      </div>
+    </div>
+    <div class="top-metric price-metric">
+      <span>Current Price</span>
+      <strong id="strip_price">not_available</strong>
+      <small id="strip_change_24h">not_available</small>
+    </div>
+    <div class="top-metric status-metric">
+      <span>Market Status</span>
+      <strong class="status-pill" id="strip_signal">not_available</strong>
+      <small>Trend Strength: <b id="strip_trend_strength">not_available</b></small>
+    </div>
+    <div class="top-metric mode-metric">
+      <span>Mode</span>
+      <select class="mode-select" id="ui_mode_select" aria-label="Dashboard view">
+        <option value="beginner" data-ui-mode="beginner">Beginner</option>
+        <option value="advanced_trader" data-ui-mode="advanced_trader">Advanced</option>
+        <option value="strategy_lab" data-ui-mode="strategy_lab">Strategy Lab</option>
+      </select>
+      <small>
+        <b id="mode">PAPER MODE</b> <b id="safe">SAFE MODE</b>
+        <b id="live">LIVE OFF</b>
+      </small>
+    </div>
+    <div class="top-metric connection-metric">
+      <span>Connection</span>
+      <strong class="connection-pill" id="strip_connection">not_configured</strong>
+      <small id="strip_latency">not_available ms</small>
+    </div>
+    <div class="top-metric updated-metric">
+      <span>Last Updated</span>
+      <strong id="strip_updated">not_available</strong>
+      <small id="strip_next_check">not_available</small>
+    </div>
+    <button
+      class="notification-bell"
+      id="notification_bell"
+      type="button"
+      title="Mark notifications read"
+    >
+      <span aria-hidden="true">!</span>
+      <strong id="strip_notifications">0</strong>
+    </button>
   </header>
-  <main>
+  <div class="dashboard-shell">
+    <aside class="sidebar" aria-label="Dashboard navigation">
+      <nav class="side-nav">
+        <button class="side-link mode-button" data-ui-mode="beginner">
+          <span class="side-icon">DB</span>
+          <span class="side-copy"><strong>Dashboard</strong><span>Simple paper view</span></span>
+        </button>
+        <button class="side-link mode-button" data-ui-mode="advanced_trader">
+          <span class="side-icon">AT</span>
+          <span class="side-copy">
+            <strong>Advanced Trader</strong><span>Charts and evidence</span>
+          </span>
+        </button>
+        <button class="side-link mode-button" data-ui-mode="strategy_lab">
+          <span class="side-icon">SL</span>
+          <span class="side-copy">
+            <strong>Strategy Lab</strong><span>Research workspace</span>
+          </span>
+        </button>
+        <button
+          class="side-link panel-jump"
+          data-ui-mode="advanced_trader"
+          data-panel-target="backtest_summary"
+        >
+          <span class="side-icon">BT</span>
+          <span class="side-copy"><strong>Backtesting</strong><span>Embedded panel</span></span>
+        </button>
+        <a class="side-link" href="/paper-report" target="_blank" rel="noreferrer">
+          <span class="side-icon">R</span>
+          <span class="side-copy"><strong>Reports</strong><span>Paper status</span></span>
+        </a>
+        <button
+          class="side-link panel-jump"
+          data-ui-mode="advanced_trader"
+          data-panel-target="triggered_alerts"
+        >
+          <span class="side-icon">AL</span>
+          <span class="side-copy"><strong>Alerts</strong><span>Local rules</span></span>
+        </button>
+        <button class="side-link panel-jump" data-ui-mode="beginner" data-panel-target="logs">
+          <span class="side-icon">LG</span>
+          <span class="side-copy"><strong>Logs</strong><span>Activity timeline</span></span>
+        </button>
+        <button
+          class="side-link panel-jump"
+          data-ui-mode="beginner"
+          data-panel-target="readiness_gate"
+        >
+          <span class="side-icon">ST</span>
+          <span class="side-copy"><strong>Settings</strong><span>Paper shell</span></span>
+        </button>
+      </nav>
+      <button class="collapse-note" id="sidebar_toggle" type="button">Collapse</button>
+    </aside>
+    <div class="dashboard-content">
+      <main>
     <section class="span-8" data-view="advanced_trader">
       <h2>Price Chart</h2>
       <div class="chart-toolbar">
@@ -1055,10 +2489,20 @@ DASHBOARD_HTML = """<!doctype html>
           <button class="chart-tool active" data-chart-overlay="markers">Signals</button>
         </div>
         <div class="segmented" aria-label="Chart navigation">
-          <button class="chart-tool" id="chart_pan_left" title="Pan left">Left</button>
+          <button
+            class="chart-tool"
+            id="chart_pan_left"
+            title="Pan left"
+            aria-label="Pan left"
+          >&larr;</button>
           <button class="chart-tool" id="chart_zoom_out" title="Zoom out">-</button>
           <button class="chart-tool" id="chart_zoom_in" title="Zoom in">+</button>
-          <button class="chart-tool" id="chart_pan_right" title="Pan right">Right</button>
+          <button
+            class="chart-tool"
+            id="chart_pan_right"
+            title="Pan right"
+            aria-label="Pan right"
+          >&rarr;</button>
         </div>
       </div>
       <div class="ticket-grid">
@@ -1089,10 +2533,21 @@ DASHBOARD_HTML = """<!doctype html>
     <section class="span-4" data-view="advanced_trader">
       <h2>Backtest Summary</h2><dl id="backtest_summary"></dl>
     </section>
-    <section class="span-4" data-view="beginner">
-      <h2>Beginner Command</h2>
+    <section class="span-4 recommendation-card" data-view="beginner">
+      <h2>Current Recommendation</h2>
       <div class="command-label" id="beginner_command_label">Do nothing now</div>
-      <dl id="beginner_command"></dl>
+      <div class="confidence-pill" id="command_confidence">CONFIDENCE: not_available</div>
+      <div class="command-summary">
+        <div>
+          <span>Reason</span>
+          <p id="command_reason">Waiting for paper dashboard state.</p>
+        </div>
+        <div>
+          <span>Next Check In</span>
+          <strong id="command_next_check">not_available</strong>
+        </div>
+      </div>
+      <dl class="detail-dl" id="beginner_command"></dl>
     </section>
     <section class="span-4" data-view="advanced_trader strategy_lab">
       <h2>Market</h2><dl id="market"></dl>
@@ -1122,7 +2577,7 @@ DASHBOARD_HTML = """<!doctype html>
       <div id="triggered_alerts"></div>
       <div id="alert_rules"></div>
     </section>
-    <section class="span-8" data-view="advanced_trader">
+    <section class="span-8" data-view="beginner advanced_trader">
       <h2>Risk & Safety</h2>
       <dl id="risk_safety_summary"></dl>
       <div id="risk_safety_checks"></div>
@@ -1200,8 +2655,10 @@ DASHBOARD_HTML = """<!doctype html>
       </div>
       <p id="position_message"></p>
     </section>
-    <section class="span-4" data-view="beginner advanced_trader strategy_lab">
-      <h2>Recommendation</h2><dl id="strategy"></dl>
+    <section class="span-4 why-card" data-view="beginner advanced_trader strategy_lab">
+      <h2>Why?</h2>
+      <div class="why-list" id="why_list"></div>
+      <dl class="detail-dl" id="strategy"></dl>
     </section>
     <section class="span-4" data-view="advanced_trader">
       <h2>Suggested Paper Trade</h2><dl id="trade"></dl>
@@ -1229,21 +2686,74 @@ DASHBOARD_HTML = """<!doctype html>
         </a>
       </div>
     </section>
-    <section class="span-5" data-view="beginner advanced_trader">
-      <h2>Paper Portfolio</h2><dl id="portfolio"></dl>
+    <section class="span-5 portfolio-card" data-view="beginner advanced_trader">
+      <h2>Portfolio Overview</h2>
+      <div class="portfolio-grid">
+        <article>
+          <span>Portfolio Value</span>
+          <strong id="strip_equity">not_available</strong>
+          <i data-spark="portfolio"></i>
+        </article>
+        <article>
+          <span>Cash</span>
+          <strong id="portfolio_cash_card">not_available</strong>
+          <i data-spark="cash"></i>
+        </article>
+        <article>
+          <span>BTC Holdings</span>
+          <strong id="portfolio_btc_card">not_available</strong>
+          <small id="portfolio_btc_value">not_available</small>
+        </article>
+        <article>
+          <span>Today's P/L</span>
+          <strong id="strip_today_pnl">not_available</strong>
+          <small id="portfolio_today_pct">not_available</small>
+        </article>
+      </div>
+      <dl class="detail-dl" id="portfolio"></dl>
     </section>
-    <section class="span-7" data-view="beginner advanced_trader">
-      <h2>Controls</h2><div class="controls">
-      <button id="approve">Approve Paper Trade</button>
-      <button class="secondary" id="reject">Reject Recommendation</button>
-      <button class="secondary" id="pause">Pause Paper Bot</button>
-      <button class="secondary" id="resume">Resume Paper Bot</button>
-      <button class="danger" id="emergency">Emergency Stop</button>
-      <button class="secondary" id="reset_emergency">Reset Emergency Stop</button>
-      <a class="button" href="/paper-report" target="_blank" rel="noreferrer">Daily Report</a>
-    </div><p id="approval_reason"></p></section>
-    <section class="span-6" data-view="beginner advanced_trader">
-      <h2>Explanation</h2><ul id="explanation"></ul>
+    <section class="span-7" data-view="beginner advanced_trader strategy_lab">
+      <h2>Runtime Telemetry</h2>
+      <dl id="runtime_telemetry"></dl>
+      <div id="portfolio_sparkline"></div>
+    </section>
+    <section class="span-7 controls-card" data-view="beginner advanced_trader">
+      <h2>Controls</h2>
+      <div class="control-tiles">
+        <button class="action-tile approve-tile" id="approve">
+          <strong>Approve</strong><span>Execute Signal</span>
+        </button>
+        <button class="action-tile reject-tile" id="reject">
+          <strong>Reject</strong><span>Skip Signal</span>
+        </button>
+        <button class="action-tile pause-tile" id="pause">
+          <strong>Pause</strong><span>Pause Trading</span>
+        </button>
+        <button class="action-tile danger-tile" id="emergency">
+          <strong>Emergency Stop</strong><span>Stop All Activity</span>
+        </button>
+        <button class="secondary compact-action" id="resume">Resume Paper Bot</button>
+        <button class="secondary compact-action" id="reset_emergency">Reset Emergency Stop</button>
+        <a
+          class="button compact-action"
+          href="/paper-report"
+          target="_blank"
+          rel="noreferrer"
+        >Daily Report</a>
+      </div>
+      <p id="approval_reason"></p>
+    </section>
+    <section class="span-6 ai-card" data-view="beginner advanced_trader">
+      <h2>AI Explanation</h2>
+      <div class="ai-body">
+        <div class="bot-avatar" aria-hidden="true">AI</div>
+        <ul id="explanation"></ul>
+      </div>
+      <div class="ai-meta">
+        <span>Model: GPT-4o</span>
+        <b>Verified</b>
+        <span id="explanation_confidence">Explanation Confidence: not_available</span>
+      </div>
     </section>
     <section class="span-6" data-view="beginner advanced_trader">
       <h2>Paper Transactions</h2><div id="transactions"></div>
@@ -1254,8 +2764,12 @@ DASHBOARD_HTML = """<!doctype html>
     <section class="span-6" data-view="beginner">
       <h2>Glossary</h2><div class="log"><dl id="glossary"></dl></div>
     </section>
-    <section class="span-6" data-view="advanced_trader">
-      <h2>Logs</h2><div class="log"><ul id="logs"></ul></div>
+    <section class="span-6 activity-card" data-view="beginner advanced_trader">
+      <h2>
+        Recent Activity
+        <button class="text-link" id="view_all_activity" type="button">View All</button>
+      </h2>
+      <div class="activity-timeline"><ul id="logs"></ul></div>
     </section>
     <section class="span-8" data-view="strategy_lab">
       <h2>Strategy Lab</h2>
@@ -1274,11 +2788,45 @@ DASHBOARD_HTML = """<!doctype html>
     <section class="span-6" data-view="strategy_lab">
       <h2>Compare Runs</h2><div id="strategy_lab_compare"></div>
     </section>
-    <section class="span-12 warning" id="warning"></section>
-  </main>
+      <section class="span-12 warning" id="warning"></section>
+      </main>
+      <footer class="status-footer" aria-label="System status">
+        <div class="footer-item">
+          <span class="footer-icon">P</span>
+          <div><strong>Paper Mode</strong><span>Simulated Trading</span></div>
+        </div>
+        <div class="footer-item">
+          <span class="footer-icon">D</span>
+          <div><strong>Data Status</strong><span id="footer_data_status">Waiting</span></div>
+        </div>
+        <div class="footer-item">
+          <span class="footer-icon">T</span>
+          <div>
+            <strong>Latency</strong><span id="footer_latency_status">not_available ms</span>
+          </div>
+        </div>
+        <div class="footer-item">
+          <span class="footer-icon">X</span>
+          <div>
+            <strong>Exchange</strong><span id="footer_exchange_status">not_configured</span>
+          </div>
+        </div>
+        <div class="footer-item">
+          <span class="footer-icon">S</span>
+          <div>
+            <strong>Risk Status</strong><span class="good" id="footer_risk_status">Safe Mode</span>
+          </div>
+        </div>
+        <div class="footer-item">
+          <span class="footer-icon">V</span>
+          <div><strong>Version</strong><span id="strip_version">not_available</span></div>
+        </div>
+      </footer>
+    </div>
+  </div>
   <script>
     const UI_MODE_KEY = "abtp.paperDashboard.uiMode";
-    const DEFAULT_UI_MODE = "advanced_trader";
+    const DEFAULT_UI_MODE = "beginner";
     let activeUiMode = localStorage.getItem(UI_MODE_KEY) || DEFAULT_UI_MODE;
     const fields = {
       market: document.getElementById("market"),
@@ -1375,8 +2923,43 @@ DASHBOARD_HTML = """<!doctype html>
       warning: document.getElementById("warning"),
       approvalReason: document.getElementById("approval_reason"),
       approve: document.getElementById("approve"),
-      modeButtons: Array.from(document.querySelectorAll("[data-ui-mode]"))
+      headerSource: document.getElementById("header_source"),
+      commandConfidence: document.getElementById("command_confidence"),
+      commandReason: document.getElementById("command_reason"),
+      commandNextCheck: document.getElementById("command_next_check"),
+      whyList: document.getElementById("why_list"),
+      portfolioCashCard: document.getElementById("portfolio_cash_card"),
+      portfolioBtcCard: document.getElementById("portfolio_btc_card"),
+      portfolioBtcValue: document.getElementById("portfolio_btc_value"),
+      portfolioTodayPct: document.getElementById("portfolio_today_pct"),
+      stripSymbol: document.getElementById("strip_symbol"),
+      stripPrice: document.getElementById("strip_price"),
+      stripChange24h: document.getElementById("strip_change_24h"),
+      stripTrendStrength: document.getElementById("strip_trend_strength"),
+      stripSignal: document.getElementById("strip_signal"),
+      stripEquity: document.getElementById("strip_equity"),
+      stripTodayPnl: document.getElementById("strip_today_pnl"),
+      stripConnection: document.getElementById("strip_connection"),
+      stripLatency: document.getElementById("strip_latency"),
+      stripNotifications: document.getElementById("strip_notifications"),
+      stripVersion: document.getElementById("strip_version"),
+      stripNextCheck: document.getElementById("strip_next_check"),
+      stripUpdated: document.getElementById("strip_updated"),
+      runtimeTelemetry: document.getElementById("runtime_telemetry"),
+      portfolioSparkline: document.getElementById("portfolio_sparkline"),
+      footerDataStatus: document.getElementById("footer_data_status"),
+      footerLatencyStatus: document.getElementById("footer_latency_status"),
+      footerExchangeStatus: document.getElementById("footer_exchange_status"),
+      footerRiskStatus: document.getElementById("footer_risk_status"),
+      notificationBell: document.getElementById("notification_bell"),
+      sidebarToggle: document.getElementById("sidebar_toggle"),
+      viewAllActivity: document.getElementById("view_all_activity"),
+      explanationConfidence: document.getElementById("explanation_confidence"),
+      modeSelect: document.getElementById("ui_mode_select"),
+      modeButtons: Array.from(document.querySelectorAll(".mode-button")),
+      panelJumps: Array.from(document.querySelectorAll(".panel-jump"))
     };
+    let nextCheckClientDeadline = null;
     const chartState = {
       timeframe: "1h",
       visibleCount: null,
@@ -1388,20 +2971,366 @@ DASHBOARD_HTML = """<!doctype html>
       drawingStartTime: "",
       drawingEndTime: ""
     };
-    function row(label, value) { return `<dt>${label}</dt><dd>${value}</dd>`; }
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+    function normalizedValue(value) {
+      if (Array.isArray(value)) {
+        return value.join(", ");
+      }
+      if (value === true) {
+        return "true";
+      }
+      if (value === false) {
+        return "false";
+      }
+      if (value === null || value === undefined || value === "") {
+        return "not_available";
+      }
+      if (typeof value === "object") {
+        return JSON.stringify(value);
+      }
+      return String(value);
+    }
+    function valueToneClass(value) {
+      const text = normalizedValue(value).toLowerCase();
+      if (["buy", "approved", "clear", "healthy", "true", "ready", "paper"].includes(text)) {
+        return " value-good";
+      }
+      if (
+        ["rejected", "false", "blocked", "bad", "emergency", "stale", "degraded"].some(
+          (token) => text.includes(token)
+        )
+      ) {
+        return " value-bad";
+      }
+      if (
+        ["hold", "warning", "warn", "paused", "review", "not_available", "none"].some(
+          (token) => text.includes(token)
+        )
+      ) {
+        return " value-warn";
+      }
+      if (text.includes("paper") || text.includes("btc") || text.includes("usdt")) {
+        return " value-accent";
+      }
+      return "";
+    }
+    function valueMarkup(value) {
+      const text = normalizedValue(value);
+      const numeric = Number(text);
+      const numericTone = Number.isFinite(numeric)
+        ? numeric > 0
+          ? " metric-positive"
+          : numeric < 0
+            ? " metric-negative"
+            : ""
+        : "";
+      return `<span class="value-chip${valueToneClass(value)}${numericTone}">`
+        + `${escapeHtml(text)}</span>`;
+    }
+    function row(label, value) {
+      return `<dt>${escapeHtml(label)}</dt><dd>${valueMarkup(value)}</dd>`;
+    }
+    function percentText(value) {
+      if (value === null || value === undefined || value === "" || value === "not_available") {
+        return "not_available";
+      }
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) {
+        return "not_available";
+      }
+      return `${numeric.toFixed(2).replace(/\\.00$/, "")}%`;
+    }
+    function compactMarketStatus(value) {
+      const text = normalizedValue(value).replaceAll("_", " ");
+      if (text === "not_available") {
+        return text;
+      }
+      if (text.length <= 12) {
+        return text;
+      }
+      return text
+        .split(" ")
+        .filter(Boolean)
+        .map((word) => word.slice(0, 4))
+        .join(" ");
+    }
     function fill(id, data) {
       fields[id].innerHTML = Object.entries(data)
-        .map(([k, v]) => row(k.replaceAll("_", " "), Array.isArray(v) ? v.join(", ") : v))
+        .map(([k, v]) => row(k.replaceAll("_", " "), v))
         .join("");
+    }
+    function formatClock(value) {
+      const timestamp = Date.parse(value || "");
+      if (!Number.isFinite(timestamp)) {
+        return "not_available";
+      }
+      return new Intl.DateTimeFormat([], {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit"
+      }).format(new Date(timestamp));
+    }
+    function formatCountdown(seconds) {
+      const activeSeconds = Math.max(0, Number(seconds) || 0);
+      const minutes = Math.floor(activeSeconds / 60);
+      const remainder = activeSeconds % 60;
+      if (minutes > 0) {
+        return `${minutes}m ${String(remainder).padStart(2, "0")}s`;
+      }
+      return `${remainder}s`;
+    }
+    function asPercentFromConfidence(value) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) {
+        return "not_available";
+      }
+      return `${Math.round(numeric * 100)}%`;
+    }
+    function fixedNumber(value, digits) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) {
+        return "not_available";
+      }
+      return numeric.toLocaleString(undefined, {
+        minimumFractionDigits: digits,
+        maximumFractionDigits: digits
+      });
+    }
+    function moneyText(value) {
+      const text = fixedNumber(value, 2);
+      return text === "not_available" ? text : `$${text}`;
+    }
+    function signedMoneyText(value) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) {
+        return "not_available";
+      }
+      const sign = numeric > 0 ? "+" : numeric < 0 ? "-" : "";
+      return `${sign}$${Math.abs(numeric).toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      })}`;
+    }
+    function compactSignedMoneyText(value) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) {
+        return "not_available";
+      }
+      const sign = numeric > 0 ? "+" : numeric < 0 ? "-" : "";
+      const abs = Math.abs(numeric);
+      if (abs >= 1000000) {
+        return `${sign}$${(abs / 1000000).toFixed(2)}M`;
+      }
+      if (abs >= 10000) {
+        return `${sign}$${(abs / 1000).toFixed(1)}K`;
+      }
+      return signedMoneyText(value);
+    }
+    function compactPercentText(value) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) {
+        return "not_available";
+      }
+      return `${numeric.toFixed(Math.abs(numeric) >= 10 ? 1 : 2).replace(/\\.0$/, "")}%`;
+    }
+    function renderCommandCard(command, strategy, refresh) {
+      const rawLabel = (command && command.label) || "WAIT";
+      const label = /do nothing|hold/i.test(rawLabel) ? "WAIT" : rawLabel;
+      const confidence = asPercentFromConfidence(strategy && strategy.ai_confidence);
+      const reason =
+        (strategy && strategy.explanation)
+        || (command && command.plain_status)
+        || "Waiting for paper dashboard state.";
+      fields.beginnerCommandLabel.textContent = label;
+      fields.commandConfidence.textContent = `CONFIDENCE: ${confidence}`;
+      fields.commandReason.textContent = reason;
+      fields.commandNextCheck.textContent = formatCountdown(
+        refresh && refresh.next_check_in_seconds
+      );
+      fields.beginnerCommandLabel.classList.toggle("metric-positive", label === "BUY");
+      fields.beginnerCommandLabel.classList.toggle("metric-negative", label === "REJECTED");
+    }
+    function renderWhyList(strategy, command) {
+      const reasons = [
+        ...((strategy && strategy.indicator_reasons) || []),
+        (strategy && strategy.risk_decision) ? `Risk decision: ${strategy.risk_decision}` : "",
+        (strategy && strategy.data_quality) ? `Data quality: ${strategy.data_quality}` : "",
+        (command && command.actionable === false) ? "Recommendation is not actionable" : ""
+      ].filter(Boolean);
+      const rows = (reasons.length ? reasons : ["No extra evidence available yet."]).slice(0, 5);
+      fields.whyList.innerHTML = rows.map((item, index) => {
+        const tone = /approved|trusted|passed|normal|healthy/i.test(item)
+          ? "good"
+          : /not|below|weak|blocked|rejected|unavailable|missing/i.test(item)
+            ? "warn"
+            : index === 0
+              ? "warn"
+              : "good";
+        const icon = tone === "good" ? "OK" : "!";
+        return `
+          <div class="why-row">
+            <span class="why-icon ${tone}">${icon}</span>
+            <span>${escapeHtml(item)}</span>
+            <span class="why-info">i</span>
+          </div>`;
+      }).join("");
+    }
+    function renderPortfolioCards(portfolio) {
+      fields.stripEquity.textContent = moneyText(
+        portfolio.current_equity || portfolio.paper_equity
+      );
+      fields.portfolioCashCard.textContent = moneyText(portfolio.cash || portfolio.paper_cash);
+      const btc = fixedNumber(portfolio.open_btc, 4);
+      fields.portfolioBtcCard.textContent = btc === "not_available" ? btc : `${btc} BTC`;
+      fields.portfolioBtcValue.textContent =
+        portfolio.unrealized_pnl
+          ? `Unrealized ${compactSignedMoneyText(portfolio.unrealized_pnl)}`
+          : "not_available";
+      fields.stripTodayPnl.textContent = signedMoneyText(portfolio.today_pnl);
+      fields.portfolioTodayPct.textContent = compactPercentText(portfolio.today_pnl_pct);
+      fields.stripTodayPnl.classList.toggle(
+        "metric-positive",
+        Number(portfolio.today_pnl || 0) > 0
+      );
+      fields.stripTodayPnl.classList.toggle(
+        "metric-negative",
+        Number(portfolio.today_pnl || 0) < 0
+      );
+    }
+    function activityTime(value) {
+      const text = formatClock(value);
+      return text === "not_available" ? "--:--:--" : text;
+    }
+    function renderActivityTimeline(activity, fallbackLogs) {
+      const items = (activity && activity.items && activity.items.length)
+        ? activity.items
+        : (fallbackLogs || []).map((item) => ({
+            event_type: item.event_type,
+            message: item.message,
+            reason: item.reason,
+            occurred_at: item.occurred_at,
+            severity: "info",
+            status_label: "INFO"
+          }));
+      if (!items.length) {
+        fields.logs.innerHTML = '<li class="empty">No recent paper activity yet.</li>';
+        return;
+      }
+      fields.logs.innerHTML = items.slice(0, 5).map((item) => {
+        const severity = item.severity || "info";
+        return `
+          <li class="activity-row">
+            <span class="activity-time">${escapeHtml(activityTime(item.occurred_at))}</span>
+            <span class="activity-dot">${severity === "action" ? "!" : "OK"}</span>
+            <span class="activity-copy">
+              <strong>${escapeHtml((item.event_type || "activity").replaceAll("_", " "))}</strong>
+              <span>${escapeHtml(item.message || item.reason || "Paper dashboard activity")}</span>
+            </span>
+            <span class="activity-tag ${escapeHtml(severity)}">
+              ${escapeHtml(item.status_label || "INFO")}
+            </span>
+          </li>`;
+      }).join("");
+    }
+    function applyShellPreferences(ui) {
+      const collapsed = Boolean(ui && ui.sidebar_collapsed);
+      document.body.classList.toggle("sidebar-collapsed", collapsed);
+      fields.sidebarToggle.textContent = collapsed ? "Expand" : "Collapse";
+    }
+    function updateMarketStrip(data) {
+      const market = data.market || {};
+      const strategy = data.strategy || {};
+      const portfolio = data.portfolio || {};
+      const notifications = data.notifications || {};
+      const app = data.app || {};
+      fields.stripSymbol.textContent = market.symbol || "BTC/USDT";
+      fields.headerSource.textContent = market.source || "demo";
+      fields.stripPrice.textContent = moneyText(market.current_price);
+      fields.stripChange24h.textContent = percentText(market.price_change_24h_pct);
+      fields.stripTrendStrength.textContent = percentText(market.trend_strength_pct);
+      fields.stripSignal.textContent =
+        compactMarketStatus(market.market_regime || strategy.recommendation || "not_available");
+      fields.stripConnection.textContent = market.exchange_connection || "not_configured";
+      const latencyText = `${market.latency_ms || "not_available"} ms`;
+      fields.stripLatency.textContent = latencyText;
+      fields.footerLatencyStatus.textContent = latencyText;
+      fields.stripNotifications.textContent =
+        notifications.unread_count || notifications.count || 0;
+      fields.notificationBell.classList.toggle("attention", (notifications.unread_count || 0) > 0);
+      fields.stripVersion.textContent = app.version || "not_available";
+      fields.stripUpdated.textContent = formatClock(market.updated_at);
+      fields.footerDataStatus.textContent =
+        (market.data_freshness || "unknown").replaceAll("_", " ");
+      fields.footerExchangeStatus.textContent = market.exchange_connection || "not_configured";
+      fields.footerRiskStatus.textContent =
+        data.safe_mode && !data.live_trading_enabled ? "Safe Mode" : "Review";
+      const marketTone = (market.market_regime || strategy.recommendation || "").toLowerCase();
+      fields.stripSignal.className = "status-pill " + (
+        marketTone.includes("bull") || marketTone.includes("buy")
+          ? "good"
+          : marketTone.includes("bear") || marketTone.includes("rejected")
+            ? "bad"
+            : "warn"
+      );
+      fields.stripConnection.className = "connection-pill " +
+        ((market.exchange_connection || "").toLowerCase() === "connected" ? "good" : "warn");
+      fields.footerRiskStatus.className =
+        data.safe_mode && !data.live_trading_enabled ? "good" : "warn";
+    }
+    function setNextCheckCountdown(refresh) {
+      if (!refresh || !refresh.server_time || !refresh.next_check_at) {
+        nextCheckClientDeadline = null;
+        fields.stripNextCheck.textContent = "not_available";
+        fields.commandNextCheck.textContent = "not_available";
+        return;
+      }
+      const serverNow = Date.parse(refresh.server_time);
+      const nextAt = Date.parse(refresh.next_check_at);
+      if (!Number.isFinite(serverNow) || !Number.isFinite(nextAt)) {
+        nextCheckClientDeadline = null;
+        return;
+      }
+      nextCheckClientDeadline = Date.now() + Math.max(0, nextAt - serverNow);
+      updateNextCheckCountdown();
+    }
+    function updateNextCheckCountdown() {
+      if (!nextCheckClientDeadline) {
+        return;
+      }
+      const seconds = Math.max(0, Math.ceil((nextCheckClientDeadline - Date.now()) / 1000));
+      const text = formatCountdown(seconds);
+      fields.stripNextCheck.textContent = text;
+      fields.commandNextCheck.textContent = text;
+    }
+    function visibleViewNames(mode) {
+      if (mode === "strategy_lab") {
+        return ["beginner", "advanced_trader", "strategy_lab"];
+      }
+      if (mode === "advanced_trader") {
+        return ["beginner", "advanced_trader"];
+      }
+      return ["beginner"];
     }
     function setModeShell(mode) {
       activeUiMode = mode;
       localStorage.setItem(UI_MODE_KEY, mode);
+      document.body.classList.remove("mode-beginner", "mode-advanced_trader", "mode-strategy_lab");
+      document.body.classList.add(`mode-${mode}`);
+      fields.modeSelect.value = mode;
       fields.modeButtons.forEach((button) => {
         button.classList.toggle("active", button.dataset.uiMode === mode);
       });
+      const visibleModes = visibleViewNames(mode);
       document.querySelectorAll("[data-view]").forEach((section) => {
-        section.hidden = !section.dataset.view.split(" ").includes(mode);
+        const sectionModes = section.dataset.view.split(" ");
+        section.hidden = !sectionModes.some((sectionMode) => visibleModes.includes(sectionMode));
       });
     }
     function renderTransactions(items, isBeginner) {
@@ -1446,6 +3375,54 @@ DASHBOARD_HTML = """<!doctype html>
       fields.glossary.innerHTML = items
         .map((item) => row(item.term, item.meaning))
         .join("");
+    }
+    function renderPortfolioSparkline(points) {
+      if (!points || !points.length) {
+        fields.portfolioSparkline.innerHTML =
+          '<p class="empty">No portfolio sparkline points yet.</p>';
+        return;
+      }
+      const values = points.map((item) => Number(item.equity)).filter(Number.isFinite);
+      if (!values.length) {
+        fields.portfolioSparkline.innerHTML =
+          '<p class="empty">No portfolio sparkline points yet.</p>';
+        return;
+      }
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const width = 240;
+      const height = 48;
+      const xStep = values.length > 1 ? width / (values.length - 1) : width;
+      const y = (value) => {
+        if (max === min) {
+          return height / 2;
+        }
+        return height - ((value - min) / (max - min)) * height;
+      };
+      const path = values.map((value, index) => {
+        const command = index === 0 ? "M" : "L";
+        return `${command}${(index * xStep).toFixed(1)},${y(value).toFixed(1)}`;
+      }).join(" ");
+      fields.portfolioSparkline.innerHTML = `
+        <svg viewBox="0 0 ${width} ${height}" width="100%" height="52" role="img"
+          aria-label="Portfolio equity sparkline">
+          <path d="${path}" fill="none" stroke="currentColor" stroke-width="2"></path>
+        </svg>`;
+    }
+    function renderRuntimeTelemetry(runtime, portfolio) {
+      fill("runtimeTelemetry", {
+        "1_24h_price_change_pct": runtime.price_change_24h_pct || "not_available",
+        "2_trend_strength_pct": runtime.trend_strength_pct || "not_available",
+        "3_exchange_connection": runtime.exchange_connection || "not_configured",
+        "4_notification_bell":
+          `${runtime.notification_count || 0} ${runtime.bell_state || "clear"}`,
+        "5_latency_ms": runtime.latency_ms || "not_available",
+        "6_app_version": runtime.app_version || "not_available",
+        "7_sparkline_points": (runtime.portfolio_sparkline || []).length,
+        "8_today_pnl": runtime.today_pnl || "not_available",
+        "9_next_check_in_seconds": runtime.next_check_in_seconds ?? "not_available"
+      });
+      renderPortfolioSparkline((runtime.portfolio_sparkline || portfolio.equity_sparkline) || []);
     }
     function renderReadinessGate(readiness) {
       const items = (readiness && readiness.checklist) || [];
@@ -2193,8 +4170,8 @@ DASHBOARD_HTML = """<!doctype html>
       renderChartControls(chart || {});
       const canvas = fields.priceChart;
       const rect = canvas.getBoundingClientRect();
-      canvas.width = Math.max(640, Math.floor(rect.width));
-      canvas.height = 320;
+      canvas.width = Math.max(320, Math.floor(rect.width));
+      canvas.height = Math.max(320, Math.floor(rect.height));
       const ctx = canvas.getContext("2d");
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       const sourceCandles = ((chart && chart.candles) || []).map(toChartCandle);
@@ -2424,7 +4401,11 @@ DASHBOARD_HTML = """<!doctype html>
       const advanced = views.advanced_trader || {};
       const strategyLab = views.strategy_lab || {};
       const beginnerMode = activeUiMode === "beginner";
+      applyShellPreferences(data.ui || {});
+      updateMarketStrip(data);
+      setNextCheckCountdown(data.refresh || {});
       fill("market", data.market);
+      renderRuntimeTelemetry(data.runtime_telemetry || {}, data.portfolio || {});
       renderWatchlist(advanced.watchlist || {});
       renderAlerts(advanced.alerts || {}, advanced.alert_rules || [], advanced.watchlist || {});
       renderRiskSafety(advanced.risk_safety || {});
@@ -2435,11 +4416,12 @@ DASHBOARD_HTML = """<!doctype html>
       renderJournalAnalytics(advanced.trade_journal || {}, data.transactions || []);
       renderTraderFeedback(advanced.trader_feedback || {});
       renderPosition(advanced.position || {});
+      renderCommandCard(beginner.command || {}, data.strategy || {}, data.refresh || {});
+      renderWhyList(data.strategy || {}, beginner.command || {});
+      renderPortfolioCards(data.portfolio || {});
       fill("strategy", data.strategy);
       fill("trade", data.suggested_paper_trade);
       fill("portfolio", beginnerMode ? beginner.portfolio_summary || {} : data.portfolio);
-      fields.beginnerCommandLabel.textContent =
-        (beginner.command && beginner.command.label) || "Do nothing now";
       fill("beginnerCommand", beginner.command || {});
       renderStrategyLab(strategyLab);
       fill("backtestSummary", advanced.backtest_summary || {});
@@ -2451,14 +4433,12 @@ DASHBOARD_HTML = """<!doctype html>
       renderGlossary(beginner.glossary || []);
       renderReadinessGate(data.readiness || {});
       const explanationRows = beginnerMode ? beginner.reasons : data.strategy.indicator_reasons;
-      fields.explanation.innerHTML = explanationRows
-        .map((item) => `<li>${item}</li>`)
+      fields.explanation.innerHTML = (explanationRows || [])
+        .map((item) => `<li>${escapeHtml(item)}</li>`)
         .join("");
-      fields.logs.innerHTML = data.logs
-        .map((item) => {
-          return `<li><strong>${item.event_type}</strong>: ${item.message} ${item.reason}</li>`;
-        })
-        .join("");
+      fields.explanationConfidence.textContent =
+        `Explanation Confidence: ${asPercentFromConfidence(data.strategy.ai_confidence)}`;
+      renderActivityTimeline(data.activity || {}, data.logs || []);
       fields.warning.textContent = data.warning;
       fields.approvalReason.textContent = data.controls.approval_block_reason;
       fields.approve.disabled = !data.controls.can_approve_paper_trade;
@@ -2475,6 +4455,31 @@ DASHBOARD_HTML = """<!doctype html>
         body: JSON.stringify({ui_mode: mode})
       });
       await load();
+    }
+    async function saveSidebarPreference(collapsed) {
+      document.body.classList.toggle("sidebar-collapsed", collapsed);
+      await fetch("/api/ui-shell", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({sidebar_collapsed: collapsed})
+      });
+      await load();
+    }
+    async function markNotificationsRead() {
+      await fetch("/api/mark-notifications-read", {method: "POST"});
+      await load();
+    }
+    async function openPanel(mode, targetId) {
+      await saveUiMode(mode);
+      const target = document.getElementById(targetId);
+      if (target) {
+        target.closest("section").scrollIntoView({behavior: "smooth", block: "start"});
+      }
+    }
+    async function viewAllActivity() {
+      const response = await fetch("/api/activity", {cache: "no-store"});
+      const activity = await response.json();
+      renderActivityTimeline(activity, []);
     }
     async function saveStrategyLabSelection() {
       await fetch("/api/strategy-lab-selection", {
@@ -2729,6 +4734,14 @@ DASHBOARD_HTML = """<!doctype html>
     fields.modeButtons.forEach((button) => {
       button.onclick = () => saveUiMode(button.dataset.uiMode);
     });
+    fields.panelJumps.forEach((button) => {
+      button.onclick = () => openPanel(button.dataset.uiMode, button.dataset.panelTarget);
+    });
+    fields.sidebarToggle.onclick = () =>
+      saveSidebarPreference(!document.body.classList.contains("sidebar-collapsed"));
+    fields.notificationBell.onclick = markNotificationsRead;
+    fields.viewAllActivity.onclick = viewAllActivity;
+    fields.modeSelect.onchange = () => saveUiMode(fields.modeSelect.value);
     [
       fields.labStrategy,
       fields.labSymbol,
@@ -2740,6 +4753,7 @@ DASHBOARD_HTML = """<!doctype html>
     });
     load();
     setInterval(load, 15000);
+    setInterval(updateNextCheckCountdown, 1000);
   </script>
 </body>
 </html>

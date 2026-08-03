@@ -36,6 +36,28 @@ def test_local_dashboard_state_is_paper_safe_and_operator_readable() -> None:
     assert state["suggested_paper_trade"]["side"] == "BUY"  # type: ignore[index]
     assert state["suggested_paper_trade"]["reward_to_risk"] == "2"  # type: ignore[index]
     assert state["portfolio"]["starting_balance"] == "10000"  # type: ignore[index]
+    assert state["portfolio"]["today_pnl"] == "0.01381588"  # type: ignore[index]
+    assert len(state["portfolio"]["equity_sparkline"]) >= 4  # type: ignore[index]
+    assert state["market"]["price_change_24h_pct"] == "not_available"  # type: ignore[index]
+    assert state["market"]["trend_strength_pct"] == "4.00"  # type: ignore[index]
+    assert state["market"]["exchange_connection"] == "not_configured"  # type: ignore[index]
+    assert state["market"]["latency_ms"] == "10"  # type: ignore[index]
+    assert state["notifications"]["count"] == 0  # type: ignore[index]
+    assert state["notifications"]["bell_state"] == "clear"  # type: ignore[index]
+    assert "version" in state["app"]  # type: ignore[operator]
+    assert state["refresh"]["next_check_in_seconds"] >= 0  # type: ignore[index,operator]
+    telemetry = state["runtime_telemetry"]  # type: ignore[assignment]
+    assert telemetry["module_numbers"] == [  # type: ignore[index]
+        "1_24h_price_change_pct",
+        "2_trend_strength_pct",
+        "3_exchange_connection_status",
+        "4_notification_bell_state",
+        "5_latency_ms",
+        "6_backend_app_version",
+        "7_portfolio_sparkline",
+        "8_today_pnl",
+        "9_next_check_countdown",
+    ]
     assert state["controls"]["can_approve_paper_trade"] is True  # type: ignore[index]
     assert "not financial advice" in state["warning"]
 
@@ -176,6 +198,77 @@ def test_adaptive_ui_mode_preference_can_be_saved_locally(tmp_path: Path) -> Non
     assert updated["ui_mode"] == "strategy_lab"
     assert restored["ui_mode"] == "strategy_lab"
     assert restored["live_trading_enabled"] is False
+
+
+def test_reference_ui_shell_backend_metadata_and_preferences_are_paper_safe(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "paper_dashboard_state.json"
+    controller = build_default_paper_dashboard_controller(state_path=str(state_path))
+
+    state = controller.state(ui_mode=DashboardUIMode.BEGINNER)
+    navigation = state["ui"]["navigation"]  # type: ignore[index]
+
+    assert {item["key"] for item in navigation} >= {  # type: ignore[index]
+        "dashboard",
+        "advanced_trader",
+        "strategy_lab",
+        "backtesting",
+        "reports",
+        "alerts",
+        "logs",
+        "settings",
+    }
+    assert all(item["paper_safe"] is True for item in navigation)  # type: ignore[index]
+    assert state["ui"]["sidebar_collapsed"] is False  # type: ignore[index]
+    assert state["activity"]["view_all_route"] == "/api/activity"  # type: ignore[index]
+
+    updated = controller.set_ui_shell_preferences(sidebar_collapsed=True)
+    restored = build_default_paper_dashboard_controller(state_path=str(state_path)).state()
+
+    assert updated["ui"]["sidebar_collapsed"] is True  # type: ignore[index]
+    assert restored["ui"]["sidebar_collapsed"] is True  # type: ignore[index]
+    assert restored["live_trading_enabled"] is False
+
+
+def test_notification_bell_unread_state_can_be_marked_read() -> None:
+    controller = build_default_paper_dashboard_controller()
+    controller.add_alert_rule(
+        alert_type="price_below",
+        symbol="BTC/USDT",
+        threshold="105",
+    )
+
+    unread = controller.state()
+    read = controller.mark_notifications_read()
+
+    assert unread["notifications"]["count"] == 1  # type: ignore[index]
+    assert unread["notifications"]["unread_count"] == 1  # type: ignore[index]
+    assert unread["notifications"]["bell_state"] == "attention"  # type: ignore[index]
+    assert read["notifications"]["count"] == 1  # type: ignore[index]
+    assert read["notifications"]["unread_count"] == 0  # type: ignore[index]
+    assert read["notifications"]["bell_state"] == "clear"  # type: ignore[index]
+    assert read["live_trading_enabled"] is False
+
+
+def test_activity_read_model_supports_compact_and_view_all_logs() -> None:
+    controller = build_default_paper_dashboard_controller()
+
+    controller.set_ui_mode(DashboardUIMode.STRATEGY_LAB)
+    controller.add_alert_rule(alert_type="price_above", symbol="BTC/USDT", threshold="120")
+    dispatch_dashboard_action(controller, DashboardAction.REJECT_RECOMMENDATION)
+    dispatch_dashboard_action(controller, DashboardAction.PAUSE_PAPER_BOT)
+
+    compact = controller.activity_state(limit=2)
+    full = controller.activity_state()
+
+    assert compact["visible_count"] == 2
+    assert compact["has_more"] is True
+    assert compact["view_all_route"] == "/api/activity"
+    assert full["total_count"] >= 3
+    assert full["visible_count"] == full["total_count"]
+    assert {item["status_label"] for item in full["items"]} >= {"WARN", "INFO"}  # type: ignore[index]
+    assert full["paper_only"] is True
 
 
 def test_strategy_lab_profile_routes_strategy_specific_evidence(tmp_path: Path) -> None:
@@ -481,6 +574,9 @@ def test_local_dashboard_can_use_binance_market_data(monkeypatch: pytest.MonkeyP
                 source_ref="fixture",
             )
 
+        def price_change_24h_pct(self, _pair: AssetPair) -> Decimal:
+            return Decimal("1.23")
+
         def order_book(self, _pair: AssetPair) -> OrderBookSnapshot:
             return OrderBookSnapshot(
                 exchange=Exchange("binance"),
@@ -518,6 +614,8 @@ def test_local_dashboard_can_use_binance_market_data(monkeypatch: pytest.MonkeyP
 
     assert state["market"]["source"] == "binance spot"  # type: ignore[index]
     assert state["market"]["current_price"] == "64784.79"  # type: ignore[index]
+    assert state["market"]["price_change_24h_pct"] == "1.23"  # type: ignore[index]
+    assert state["market"]["exchange_connection"] == "connected"  # type: ignore[index]
     assert state["live_trading_enabled"] is False
 
 
@@ -544,6 +642,9 @@ def test_binance_market_data_refreshes_while_dashboard_is_running(
                 captured_at=captured_at,
                 source_ref="fixture-refresh",
             )
+
+        def price_change_24h_pct(self, _pair: AssetPair) -> Decimal:
+            return Decimal("2.50")
 
         def order_book(self, _pair: AssetPair) -> OrderBookSnapshot:
             return OrderBookSnapshot(
@@ -852,6 +953,9 @@ def test_trader_readiness_gate_checks_views_routes_and_trade_evidence(tmp_path: 
     }.issubset(checklist_ids)
     assert all(route["paper_safe"] is True for route in routes)  # type: ignore[index]
     assert all(route["live_order_capability"] is False for route in routes)  # type: ignore[index]
+    assert "GET /api/activity" in {route["route"] for route in routes}  # type: ignore[index]
+    assert "POST /api/ui-shell" in {route["route"] for route in routes}  # type: ignore[index]
+    assert "POST /api/mark-notifications-read" in {route["route"] for route in routes}  # type: ignore[index]
     assert "POST /api/approve-paper-trade" in {route["route"] for route in routes}  # type: ignore[index]
     assert "POST /api/paper-order-ticket" in {route["route"] for route in routes}  # type: ignore[index]
     assert "POST /api/cancel-paper-order" in {route["route"] for route in routes}  # type: ignore[index]
@@ -1054,6 +1158,19 @@ def test_http_adapter_serves_ui_status_report_and_safe_actions() -> None:
         b'{"reason":"fixture close"}',
         controller,
     )
+    ui_shell = handle_dashboard_request(
+        "POST",
+        "/api/ui-shell",
+        b'{"sidebar_collapsed":true}',
+        controller,
+    )
+    activity = handle_dashboard_request("GET", "/api/activity?limit=2", b"", controller)
+    notifications_read = handle_dashboard_request(
+        "POST",
+        "/api/mark-notifications-read",
+        b"",
+        controller,
+    )
 
     assert page.status == HTTPStatus.OK
     assert "ABTP Paper Trading Dashboard" in page.body
@@ -1124,13 +1241,32 @@ def test_http_adapter_serves_ui_status_report_and_safe_actions() -> None:
     assert "live capital ready" in page.body
     assert "Proof Points" in page.body
     assert "profitability claim" in page.body
+    assert "Runtime Telemetry" in page.body
+    assert 'class="topbar"' in page.body
+    assert "notification_bell" in page.body
+    assert "why_list" in page.body
+    assert "portfolio-grid" in page.body
+    assert "control-tiles" in page.body
+    assert "activity-timeline" in page.body
+    assert "strip_change_24h" in page.body
+    assert "strip_trend_strength" in page.body
+    assert "strip_connection" in page.body
+    assert "strip_notifications" in page.body
+    assert "strip_next_check" in page.body
     assert status.status == HTTPStatus.OK
     assert '"mode": "PAPER MODE"' in status.body
     assert '"views": {' in status.body
+    assert '"runtime_telemetry": {' in status.body
+    assert '"price_change_24h_pct": "not_available"' in status.body
+    assert '"navigation": [' in status.body
+    assert '"activity": {' in status.body
     readiness = handle_dashboard_request("GET", "/api/readiness", b"", controller)
     assert readiness.status == HTTPStatus.OK
     assert '"live_trading_enabled": false' in readiness.body
     assert '"backend_routes_paper_safe"' in readiness.body
+    assert '"GET /api/activity"' in readiness.body
+    assert '"POST /api/ui-shell"' in readiness.body
+    assert '"POST /api/mark-notifications-read"' in readiness.body
     assert '"POST /api/approve-paper-trade"' in readiness.body
     assert report.status == HTTPStatus.OK
     assert "Generated from current local dashboard state" in report.body
@@ -1199,6 +1335,13 @@ def test_http_adapter_serves_ui_status_report_and_safe_actions() -> None:
     assert close_position.status == HTTPStatus.OK
     assert '"side": "sell"' in close_position.body
     assert '"order_type": "market"' in close_position.body
+    assert ui_shell.status == HTTPStatus.OK
+    assert '"sidebar_collapsed": true' in ui_shell.body
+    assert activity.status == HTTPStatus.OK
+    assert '"view_all_route": "/api/activity"' in activity.body
+    assert '"visible_count": 2' in activity.body
+    assert notifications_read.status == HTTPStatus.OK
+    assert '"bell_state": "clear"' in notifications_read.body
 
 
 def test_http_adapter_saves_adaptive_ui_mode_without_live_trading() -> None:

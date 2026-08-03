@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 
 $ProjectRoot = "E:\krypto"
 $Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
-$DashboardPort = 8785
+$DashboardPort = 8765
 $DashboardUrl = "http://127.0.0.1:$DashboardPort/"
 $StatusUrl = "${DashboardUrl}api/status"
 $env:PYTHONPATH = Join-Path $ProjectRoot "src"
@@ -11,34 +11,77 @@ $env:ABTP_PAPER_STATE_PATH = Join-Path $ProjectRoot "docs\paper_dashboard_state.
 $env:ABTP_PAPER_DB_PATH = Join-Path $ProjectRoot "docs\paper_dashboard.sqlite"
 
 function Stop-StaleDashboard {
-    $connections = Get-NetTCPConnection `
-        -LocalAddress "127.0.0.1" `
-        -LocalPort $DashboardPort `
-        -State Listen `
-        -ErrorAction SilentlyContinue
-    foreach ($connection in $connections) {
-        Stop-Process -Id $connection.OwningProcess -Force -ErrorAction SilentlyContinue
+    $listenerProcessIds = Get-DashboardListenerProcessIds
+    foreach ($processId in $listenerProcessIds) {
+        if (-not (Test-OwnedDashboardProcess $processId)) {
+            throw "Port $DashboardPort is used by process $processId, but it does not look like this dashboard. Close it manually or choose another port."
+        }
+        Stop-Process -Id $processId -Force -ErrorAction Stop
     }
-    if ($connections) {
+    if ($listenerProcessIds) {
         Start-Sleep -Seconds 1
     }
 }
 
-try {
-    $page = Invoke-WebRequest -Uri $DashboardUrl -UseBasicParsing -TimeoutSec 2
-    if ($page.Content -notmatch 'setInterval\(load, 15000\)') {
-        throw "Dashboard on $DashboardPort is not the auto-refresh paper UI."
-    }
-}
-catch {
-    Stop-StaleDashboard
-    Start-Process `
-        -FilePath $Python `
-        -ArgumentList "-m", "abtp.dashboard.paper_server", "--host", "127.0.0.1", "--port", "$DashboardPort" `
-        -WorkingDirectory $ProjectRoot `
-        -WindowStyle Hidden
+function Test-OwnedDashboardProcess {
+    param([string]$ProcessId)
 
-    Start-Sleep -Seconds 2
+    $process = Get-CimInstance Win32_Process `
+        -Filter "ProcessId = $ProcessId" `
+        -ErrorAction SilentlyContinue
+    if ($null -eq $process) {
+        return $false
+    }
+
+    $commandLine = [string]$process.CommandLine
+    $executablePath = [string]$process.ExecutablePath
+    $pythonPattern = [regex]::Escape($Python)
+    $portPattern = "--port\s+$DashboardPort(?:\s|$)"
+
+    return (
+        ($executablePath -match 'python(?:\.exe)?$' -or $commandLine -match $pythonPattern) -and
+        $commandLine -match 'abtp\.dashboard\.paper_server' -and
+        $commandLine -match $portPattern
+    )
+}
+
+function Get-DashboardListenerProcessIds {
+    $pattern = "127\.0\.0\.1:$DashboardPort\s+0\.0\.0\.0:0\s+LISTENING"
+    return @(
+        netstat -ano |
+            Select-String $pattern |
+            ForEach-Object { ($_ -split "\s+")[-1] } |
+            Sort-Object -Unique
+    )
+}
+
+Stop-StaleDashboard
+Start-Process `
+    -FilePath $Python `
+    -ArgumentList "-m", "abtp.dashboard.paper_server", "--host", "127.0.0.1", "--port", "$DashboardPort" `
+    -WorkingDirectory $ProjectRoot `
+    -WindowStyle Hidden
+
+Start-Sleep -Seconds 2
+
+$page = Invoke-WebRequest -Uri $DashboardUrl -UseBasicParsing -TimeoutSec 5
+if (
+    $page.Content -notmatch 'setInterval\(load, 15000\)' -or
+    $page.Content -notmatch 'data-dashboard-build="dropdown-labels-v1"' -or
+    $page.Content -notmatch 'class="topbar"' -or
+    $page.Content -notmatch 'notification_bell' -or
+    $page.Content -notmatch 'portfolio-grid' -or
+    $page.Content -notmatch '>Beginner</option>' -or
+    $page.Content -notmatch '>Advanced</option>' -or
+    $page.Content -notmatch '>Strategy Lab</option>'
+) {
+    throw "Dashboard on $DashboardPort is not the polished adaptive paper UI."
+}
+$status = Invoke-WebRequest -Uri $StatusUrl -UseBasicParsing -TimeoutSec 5 |
+    Select-Object -ExpandProperty Content |
+    ConvertFrom-Json
+if ($status.market.source -eq "demo" -and $status.market.data_freshness -eq "healthy") {
+    throw "Dashboard on $DashboardPort was started without Binance market mode."
 }
 
 Start-Process $DashboardUrl
