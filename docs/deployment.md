@@ -50,6 +50,35 @@ Deployment smoke is satisfied when:
 - audit rows remain append-only
 - a backup/restore drill preserves audit reconstruction
 
+## AWS Lightsail
+
+The repository now includes a container-ready `Dockerfile` that starts the
+paper dashboard on port `8765` with the safe paper defaults enabled. This makes
+AWS Lightsail container services the simplest managed deployment path.
+
+Recommended deployment flow:
+
+1. Build the image locally.
+2. Push the image to a registry you can pull from, or use the Lightsail image
+   push workflow.
+3. Create a Lightsail container service.
+4. Create a deployment that runs:
+   `abtp-paper-dashboard --host 0.0.0.0 --port 8765`
+5. Expose container port `8765` as the public endpoint.
+6. Point the health check at `/api/readiness`.
+7. Confirm the service reports `SAFE_MODE=true`,
+   `ABTP_TRADING_MODE=paper`, and `ABTP_ENABLE_LIVE_TRADING=false`.
+
+Local verification before upload:
+
+```bash
+docker build -t abtp-paper-dashboard .
+docker run --rm -p 8765:8765 abtp-paper-dashboard
+```
+
+Then open `http://127.0.0.1:8765` and confirm `/api/readiness` returns a healthy
+status.
+
 ## Rollback
 
 Rollback to a previous release by stopping all running jobs, keeping
