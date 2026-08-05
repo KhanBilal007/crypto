@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -32,7 +33,6 @@ from abtp.exchanges.base import (
 )
 from abtp.exchanges.errors import InvalidSymbolError, UnsupportedOperationError
 
-BINANCE_SPOT_BASE_URL = "https://api.binance.com"
 BTC_USDT = AssetPair(Asset("BTC"), Asset("USDT"))
 ETH_USDT = AssetPair(Asset("ETH"), Asset("USDT"))
 SOL_USDT = AssetPair(Asset("SOL"), Asset("USDT"))
@@ -43,7 +43,7 @@ BINANCE_SPOT_PAIRS = (BTC_USDT, ETH_USDT, SOL_USDT)
 class BinanceSpotMarketDataConfig:
     """Public Binance spot market-data settings."""
 
-    base_url: str = BINANCE_SPOT_BASE_URL
+    base_url: str = field(default_factory=lambda: _default_binance_base_url())
     timeout_seconds: float = 5.0
 
     def __post_init__(self) -> None:
@@ -195,6 +195,10 @@ def _spot_symbol(pair: AssetPair) -> ExchangeSymbol:
         maker_fee_bps=Decimal("10"),
         taker_fee_bps=Decimal("10"),
     )
+
+
+def _default_binance_base_url() -> str:
+    return os.getenv("ABTP_BINANCE_BASE_URL", "https://data-api.binance.vision")
 
 
 def _binance_symbol(pair: AssetPair) -> str:

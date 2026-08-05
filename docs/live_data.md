@@ -57,6 +57,14 @@ order through the stream raises `UnsupportedOperationError`. Trading behavior
 must remain behind the Risk Management Engine and exchange adapter execution
 controls from earlier stages.
 
+## Binance Public Host
+
+The Binance spot adapter is read-only and is meant for public market data.
+Deployments should point it at Binance's public market-data host, not a live
+trading credential flow. In this repository that host defaults to
+`https://data-api.binance.vision`, and it can be overridden with
+`ABTP_BINANCE_BASE_URL` if needed.
+
 ## Not Implemented
 
 Stage 011 does not add:
@@ -69,4 +77,3 @@ Stage 011 does not add:
 - strategy logic
 - risk decision-making
 - order execution
-

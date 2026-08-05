@@ -5,7 +5,11 @@ from decimal import Decimal
 import pytest
 
 from abtp.domain import Asset, AssetPair
-from abtp.exchanges import BinanceSpotMarketDataAdapter, UnsupportedOperationError
+from abtp.exchanges import (
+    BinanceSpotMarketDataAdapter,
+    BinanceSpotMarketDataConfig,
+    UnsupportedOperationError,
+)
 
 
 class FixtureBinanceAdapter(BinanceSpotMarketDataAdapter):
@@ -116,3 +120,9 @@ def test_binance_spot_adapter_is_read_only() -> None:
 
     with pytest.raises(UnsupportedOperationError, match="market-data-only"):
         adapter.submit_order(None)  # type: ignore[arg-type]
+
+
+def test_binance_spot_market_data_config_defaults_to_public_market_data_host() -> None:
+    config = BinanceSpotMarketDataConfig()
+
+    assert config.base_url == "https://data-api.binance.vision"

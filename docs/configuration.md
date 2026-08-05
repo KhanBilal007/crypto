@@ -31,6 +31,13 @@ Even when a live profile validates, Stage 006 still reports
 `RuntimeSettings.can_execute_live == False` because live order execution is not
 implemented or enabled in this stage.
 
+## Binance Market Data
+
+The paper dashboard's Binance market-data path uses public spot endpoints and
+does not require `ABTP_LIVE_EXCHANGE_API_KEY` or `ABTP_LIVE_EXCHANGE_API_SECRET`.
+If you want to override the public data host, set `ABTP_BINANCE_BASE_URL`
+explicitly.
+
 ## Secrets
 
 Configuration code must never print, log, or store secret values in plaintext.
