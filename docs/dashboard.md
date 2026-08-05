@@ -44,5 +44,18 @@ local server over the existing paper API and paper engine contracts:
 .\.venv\Scripts\python.exe -m abtp.dashboard.paper_server
 ```
 
+If the package is installed, the same server can be started through the
+console script:
+
+```powershell
+abtp-paper-dashboard
+```
+
+You can also launch the package module directly:
+
+```powershell
+python -m abtp.dashboard
+```
+
 Open `http://127.0.0.1:8765` while the command is running. Stop it with
 `Ctrl+C`. The UI is paper-only and cannot submit live orders.

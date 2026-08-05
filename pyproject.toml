@@ -19,6 +19,9 @@ dev = [
   "mypy>=1.10",
 ]
 
+[project.scripts]
+abtp-paper-dashboard = "abtp.dashboard.paper_server:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
@@ -43,4 +46,3 @@ line-ending = "lf"
 python_version = "3.11"
 strict = true
 packages = ["abtp"]
-
