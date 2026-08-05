@@ -740,34 +740,44 @@ DASHBOARD_HTML = """<!doctype html>
   <style>
     :root {
       color-scheme: dark;
-      --bg: #06111a;
-      --bg-2: #081823;
-      --panel: #0b1a26;
-      --panel-soft: #0e2230;
-      --text: #e8f1fb;
-      --muted: #91a5b8;
-      --line: #1d3444;
-      --line-strong: #2b4d62;
-      --good: #32d583;
-      --warn: #ffb84d;
-      --bad: #ff5c5c;
-      --accent: #2f81ff;
+      --bg: #04101a;
+      --bg-2: #061522;
+      --header-bg: #04111c;
+      --sidebar-bg: #061522;
+      --panel: #081927;
+      --panel-soft: #0b2030;
+      --panel-elevated: #0d2434;
+      --panel-hover: #102a3d;
+      --text: #edf5ff;
+      --text-soft: #c7d4e2;
+      --muted: #8297aa;
+      --muted-2: #60778c;
+      --line: #173448;
+      --line-soft: rgba(83, 121, 150, 0.28);
+      --line-strong: #255675;
+      --good: #2fd078;
+      --warn: #f6ad2f;
+      --bad: #f0444f;
+      --accent: #2388ff;
+      --accent-bright: #339cff;
+      --accent-soft: rgba(35, 136, 255, 0.14);
       --accent-2: #7c5cff;
       --teal: #20c7b5;
       --gold: #f2b84b;
-      --good-bg: rgba(23, 178, 106, 0.14);
-      --warn-bg: rgba(255, 184, 77, 0.14);
-      --bad-bg: rgba(255, 92, 92, 0.13);
-      --accent-bg: rgba(47, 129, 255, 0.16);
-      --shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+      --orange: #f7931a;
+      --good-bg: rgba(47, 208, 120, 0.12);
+      --warn-bg: rgba(246, 173, 47, 0.13);
+      --bad-bg: rgba(240, 68, 79, 0.13);
+      --accent-bg: var(--accent-soft);
+      --shadow: 0 14px 34px rgba(0, 0, 0, 0.24);
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       font-family: Inter, Segoe UI, Arial, sans-serif;
       background:
-        radial-gradient(circle at top left, rgba(47, 129, 255, 0.14), transparent 320px),
-        linear-gradient(180deg, #07131d 0, var(--bg) 44%, #041018 100%);
+        radial-gradient(circle at 10% 0%, rgba(35, 136, 255, 0.10), transparent 360px),
+        linear-gradient(180deg, #04111c 0%, var(--bg-2) 48%, #03101a 100%);
       color: var(--text);
       min-width: 320px;
     }
@@ -1299,6 +1309,89 @@ DASHBOARD_HTML = """<!doctype html>
       gap: 10px;
       margin-bottom: 14px;
     }
+    body.mode-strategy_lab .selector-grid {
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      align-items: end;
+    }
+    body.mode-strategy_lab .selector-grid label {
+      min-width: 0;
+    }
+    body.mode-strategy_lab .selector-grid select {
+      width: 100%;
+      min-width: 0;
+    }
+    body.mode-strategy_lab #strategy_lab {
+      grid-template-columns: minmax(140px, 0.42fr) minmax(0, 0.58fr);
+      align-items: start;
+    }
+    body.mode-strategy_lab #strategy_lab_evidence > dl {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 4px;
+      margin: 0;
+    }
+    body.mode-strategy_lab #strategy_lab dt,
+    body.mode-strategy_lab #strategy_lab_evidence dt {
+      text-align: left;
+      line-height: 1.25;
+      overflow-wrap: anywhere;
+    }
+    body.mode-strategy_lab #strategy_lab_evidence dt {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+    body.mode-strategy_lab #strategy_lab dd,
+    body.mode-strategy_lab #strategy_lab_evidence dd {
+      line-height: 1.25;
+      overflow-wrap: anywhere;
+    }
+    body.mode-strategy_lab #strategy_lab dd {
+      text-align: right;
+    }
+    body.mode-strategy_lab #strategy_lab_evidence dd {
+      margin: 0;
+      text-align: left;
+    }
+    body.mode-strategy_lab #strategy_lab_evidence .value-chip {
+      justify-content: flex-start;
+      width: 100%;
+      line-height: 1.25;
+      text-align: left;
+    }
+    body.mode-strategy_lab section:has(#strategy_lab),
+    body.mode-strategy_lab section:has(#strategy_lab_evidence),
+    body.mode-strategy_lab section:has(#strategy_lab_compare) {
+      overflow: hidden;
+    }
+    body.mode-strategy_lab #strategy_lab_evidence,
+    body.mode-strategy_lab #strategy_lab_compare {
+      max-height: 560px;
+      overflow: auto;
+      scrollbar-gutter: stable;
+    }
+    body.mode-strategy_lab #strategy_lab_evidence h3 {
+      margin: 14px 0 8px;
+      color: var(--text);
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+    body.mode-strategy_lab #strategy_lab_evidence table,
+    body.mode-strategy_lab #strategy_lab_compare table {
+      min-width: 760px;
+      width: 100%;
+      table-layout: fixed;
+    }
+    body.mode-strategy_lab #strategy_lab_evidence th,
+    body.mode-strategy_lab #strategy_lab_evidence td,
+    body.mode-strategy_lab #strategy_lab_compare th,
+    body.mode-strategy_lab #strategy_lab_compare td {
+      white-space: normal;
+      overflow-wrap: anywhere;
+      line-height: 1.25;
+    }
     .ticket-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1330,162 +1423,19 @@ DASHBOARD_HTML = """<!doctype html>
       resize: vertical;
     }
     [hidden] { display: none !important; }
-    body.mode-beginner main {
-      grid-template-columns: repeat(12, minmax(0, 1fr));
-      align-items: start;
-      gap: 14px;
-      padding: 0 16px 18px;
-      max-width: 1480px;
-    }
-    body.mode-beginner .market-strip {
-      grid-template-columns: repeat(5, minmax(0, 1fr));
-      gap: 8px;
-      padding: 0 10px;
-    }
-    body.mode-beginner .market-pill {
-      padding: 7px 9px;
-    }
-    body.mode-beginner .market-pill span:first-child {
-      font-size: 0.68rem;
-    }
-    body.mode-beginner .market-pill strong {
-      font-size: 0.88rem;
-    }
-    body.mode-beginner section[data-view~="beginner"] {
-      padding: 14px;
-      font-size: 0.92rem;
-      box-shadow: var(--shadow);
-    }
-    body.mode-beginner section:has(#beginner_command) {
-      grid-column: span 4;
-      min-height: 280px;
-    }
-    body.mode-beginner section:has(#strategy) {
-      grid-column: span 4;
-      min-height: 280px;
-    }
-    body.mode-beginner section:has(#portfolio) {
-      grid-column: span 4;
-      min-height: 280px;
-    }
-    body.mode-beginner section:has(#approval_reason) {
-      grid-column: span 8;
-      min-height: 198px;
-    }
-    body.mode-beginner section:has(#transactions) {
-      grid-column: span 4;
-      min-height: 198px;
-    }
-    body.mode-beginner section:has(#explanation) { grid-column: span 8; }
-    body.mode-beginner section:has(#readiness_gate),
-    body.mode-beginner section:has(#glossary) { grid-column: span 6; }
-    body.mode-advanced_trader section,
-    body.mode-strategy_lab section { order: 30; }
-    body.mode-advanced_trader section:has(#beginner_command),
-    body.mode-strategy_lab section:has(#beginner_command) {
-      order: 1;
-      grid-column: span 4;
-      min-height: 280px;
-      border-color: rgba(47, 129, 255, 0.72);
-      box-shadow: 0 0 0 1px rgba(47, 129, 255, 0.28), var(--shadow);
-    }
-    body.mode-advanced_trader section:has(#strategy),
-    body.mode-strategy_lab section:has(#strategy) {
-      order: 2;
-      grid-column: span 4;
-      min-height: 280px;
-    }
-    body.mode-advanced_trader section:has(#portfolio),
-    body.mode-strategy_lab section:has(#portfolio) {
-      order: 3;
-      grid-column: span 4;
-      min-height: 280px;
-    }
-    body.mode-advanced_trader section:has(#approval_reason),
-    body.mode-strategy_lab section:has(#approval_reason) { order: 4; grid-column: span 8; }
-    body.mode-advanced_trader section:has(#transactions),
-    body.mode-strategy_lab section:has(#transactions) { order: 5; grid-column: span 4; }
-    body.mode-advanced_trader section:has(#explanation),
-    body.mode-strategy_lab section:has(#explanation) { order: 6; grid-column: span 8; }
-    body.mode-advanced_trader section:has(#readiness_gate),
-    body.mode-strategy_lab section:has(#readiness_gate) { order: 7; grid-column: span 6; }
-    body.mode-advanced_trader section:has(#glossary),
-    body.mode-strategy_lab section:has(#glossary) { order: 8; grid-column: span 6; }
     body.mode-advanced_trader section:has(#price_chart),
     body.mode-strategy_lab section:has(#price_chart) { order: 20; }
     body.mode-advanced_trader section[data-view~="advanced_trader"],
     body.mode-strategy_lab section[data-view~="advanced_trader"] { order: 24; }
     body.mode-advanced_trader section:has(#warning),
     body.mode-strategy_lab section:has(#warning) { order: 80; }
-    body.mode-beginner section[data-view~="beginner"] h2 {
-      margin-bottom: 8px;
-      font-size: 13px;
-    }
-    body.mode-beginner section[data-view~="beginner"] h2::before {
-      width: 7px;
-      height: 7px;
-      box-shadow: 0 0 0 3px var(--good-bg);
-    }
-    body.mode-beginner section[data-view~="beginner"] dl {
-      grid-template-columns: minmax(82px, 0.85fr) minmax(0, 1.15fr);
-      gap: 5px 8px;
-    }
-    body.mode-beginner section[data-view~="beginner"] dt,
-    body.mode-beginner section[data-view~="beginner"] dd,
-    body.mode-beginner section[data-view~="beginner"] li,
-    body.mode-beginner section[data-view~="beginner"] p {
-      line-height: 1.25;
-    }
-    body.mode-beginner section[data-view~="beginner"] table {
-      font-size: 0.78rem;
-      min-width: 520px;
-    }
-    body.mode-beginner section[data-view~="beginner"] th,
-    body.mode-beginner section[data-view~="beginner"] td {
-      padding: 5px 6px;
-    }
-    body.mode-beginner .command-label {
-      font-size: 1.05rem;
-      margin-bottom: 6px;
-    }
-    body.mode-beginner .controls {
-      gap: 7px;
-    }
-    body.mode-beginner button,
-    body.mode-beginner a.button {
-      min-height: 32px;
-      padding: 6px 9px;
-      font-size: 0.82rem;
-    }
-    body.mode-beginner #approval_reason {
-      margin: 8px 0 0;
-      font-size: 0.82rem;
-      line-height: 1.25;
-    }
-    body.mode-beginner section:has(#beginner_command) {
-      order: 1;
-      border-color: rgba(47, 129, 255, 0.72);
-      box-shadow: 0 0 0 1px rgba(47, 129, 255, 0.28), var(--shadow);
-    }
-    body.mode-beginner section:has(#strategy) { order: 2; }
-    body.mode-beginner section:has(#portfolio) { order: 3; }
-    body.mode-beginner section:has(#approval_reason) { order: 4; }
-    body.mode-beginner section:has(#transactions) { order: 5; }
-    body.mode-beginner section:has(#explanation) { order: 6; }
-    body.mode-beginner section:has(#readiness_gate) { order: 7; }
-    body.mode-beginner section:has(#glossary) { order: 8; }
-    body.mode-beginner #warning {
-      order: 9;
-      grid-column: 1 / -1;
-      min-height: 36px;
-      padding: 8px 10px;
-    }
     .status-footer {
       display: grid;
-      grid-template-columns: repeat(6, minmax(120px, 1fr));
+      grid-template-columns: repeat(6, minmax(0, 1fr));
       gap: 0;
-      border-top: 1px solid var(--line);
-      background: rgba(5, 16, 24, 0.96);
+      min-height: 88px;
+      border-top: 1px solid var(--line-soft);
+      background: var(--header-bg);
       margin-top: 2px;
     }
     .footer-item {
@@ -1493,9 +1443,9 @@ DASHBOARD_HTML = """<!doctype html>
       grid-template-columns: 30px minmax(0, 1fr);
       gap: 10px;
       align-items: center;
-      min-height: 68px;
+      min-height: 88px;
       padding: 10px 18px;
-      border-right: 1px solid var(--line);
+      border-right: 1px solid var(--line-soft);
     }
     .footer-item:last-child { border-right: 0; }
     .footer-icon {
@@ -1522,21 +1472,22 @@ DASHBOARD_HTML = """<!doctype html>
     .topbar {
       display: grid;
       grid-template-columns:
-        172px 174px minmax(160px, 1fr) minmax(220px, 1.05fr)
-        150px 168px 146px 56px;
+        minmax(176px, 190px) minmax(168px, 184px) minmax(176px, 204px)
+        minmax(188px, 210px) minmax(214px, 250px) minmax(144px, 162px)
+        minmax(138px, 156px) 64px;
       gap: 0;
       align-items: stretch;
-      min-height: 106px;
+      min-height: 91px;
       padding: 0;
-      background: #07131d;
+      background: var(--header-bg);
     }
     .brand-cluster,
     .pair-tile,
     .top-metric,
     .notification-bell {
       min-width: 0;
-      border-right: 1px solid var(--line);
-      padding: 16px 18px;
+      border-right: 1px solid var(--line-soft);
+      padding: 14px 18px;
       display: flex;
       align-items: center;
     }
@@ -1544,16 +1495,33 @@ DASHBOARD_HTML = """<!doctype html>
       gap: 12px;
     }
     .brand-cluster .app-mark {
-      width: 40px;
-      height: 40px;
-      border-radius: 12px;
+      width: 44px;
+      height: 44px;
+      border-radius: 0;
       font-size: 0;
       position: relative;
+      background: transparent;
+      box-shadow: none;
+      clip-path: polygon(25% 5%, 75% 5%, 100% 50%, 75% 95%, 25% 95%, 0 50%);
+      border: 0;
     }
     .brand-cluster .app-mark::before {
-      content: "AB";
-      font-size: 13px;
-      letter-spacing: 0;
+      content: "";
+      width: 34px;
+      height: 34px;
+      display: block;
+      background:
+        linear-gradient(30deg, transparent 34%, var(--accent) 35% 48%, transparent 49%),
+        linear-gradient(150deg, transparent 34%, var(--accent-bright) 35% 48%, transparent 49%),
+        linear-gradient(270deg, transparent 34%, #1b63d7 35% 48%, transparent 49%);
+      clip-path: polygon(25% 5%, 75% 5%, 100% 50%, 75% 95%, 25% 95%, 0 50%);
+    }
+    .brand-cluster .app-mark::after {
+      content: "";
+      position: absolute;
+      inset: 13px;
+      border: 3px solid #6cb6ff;
+      clip-path: polygon(25% 5%, 75% 5%, 100% 50%, 75% 95%, 25% 95%, 0 50%);
     }
     .brand-cluster h1 {
       font-size: 31px;
@@ -1568,16 +1536,23 @@ DASHBOARD_HTML = """<!doctype html>
       gap: 14px;
     }
     .coin-mark {
-      width: 44px;
-      height: 44px;
+      width: 42px;
+      height: 42px;
       border-radius: 999px;
       display: grid;
       place-items: center;
       flex: 0 0 auto;
-      background: linear-gradient(135deg, #ffb13d, #f7931a);
+      background: linear-gradient(135deg, #ffb13d, var(--orange));
       color: white;
       font-weight: 900;
       box-shadow: 0 0 0 6px rgba(247, 147, 26, 0.12);
+    }
+    .coin-mark {
+      font-size: 0;
+    }
+    .coin-mark::before {
+      content: "\\20BF";
+      font-size: 23px;
     }
     .pair-tile strong {
       display: block;
@@ -1679,9 +1654,11 @@ DASHBOARD_HTML = """<!doctype html>
       min-width: 0;
       width: 100%;
       border: 0;
-      background: #1558d6;
+      background: linear-gradient(180deg, #145ddf, #0c3d97);
       color: white;
       cursor: pointer;
+      text-transform: none;
+      font-size: 15px;
     }
     .mode-metric small {
       display: flex;
@@ -1691,6 +1668,9 @@ DASHBOARD_HTML = """<!doctype html>
     .mode-metric small b {
       font-size: 9px;
       color: var(--muted);
+    }
+    .mode-metric small b:first-child {
+      color: #79bdff;
     }
     .notification-bell {
       justify-content: center;
@@ -1729,7 +1709,7 @@ DASHBOARD_HTML = """<!doctype html>
       line-height: 1;
     }
     .dashboard-shell {
-      grid-template-columns: 196px minmax(0, 1fr);
+      grid-template-columns: 184px minmax(0, 1fr);
     }
     body.sidebar-collapsed .dashboard-shell {
       grid-template-columns: 76px minmax(0, 1fr);
@@ -1744,10 +1724,10 @@ DASHBOARD_HTML = """<!doctype html>
       padding-inline: 8px;
     }
     .sidebar {
-      top: 106px;
-      height: calc(100vh - 106px);
-      padding: 16px 0 24px;
-      background: #07131d;
+      top: 91px;
+      height: calc(100vh - 91px);
+      padding: 14px 0 18px;
+      background: var(--sidebar-bg);
     }
     .side-nav {
       gap: 10px;
@@ -1756,6 +1736,7 @@ DASHBOARD_HTML = """<!doctype html>
     button.side-link,
     a.side-link {
       min-height: 56px;
+      height: auto;
       border-radius: 8px;
       color: #a9b8cb;
     }
@@ -1782,19 +1763,21 @@ DASHBOARD_HTML = """<!doctype html>
       text-align: left;
     }
     .dashboard-content {
-      padding-top: 22px;
-      overflow-x: auto;
+      padding-top: 14px;
+      overflow-x: hidden;
     }
     main {
-      max-width: 1328px;
-      min-width: 1120px;
-      gap: 16px;
+      max-width: 1680px;
+      min-width: 0;
+      width: 100%;
+      gap: 12px;
       padding: 0 20px 18px;
     }
     section {
-      background: rgba(9, 22, 33, 0.96);
-      border-color: #223747;
-      box-shadow: none;
+      background: var(--panel);
+      border-color: var(--line);
+      border-radius: 9px;
+      box-shadow: var(--shadow);
       overflow: hidden;
     }
     section[data-view~="beginner"],
@@ -1812,14 +1795,14 @@ DASHBOARD_HTML = """<!doctype html>
       display: none;
     }
     .recommendation-card {
-      min-height: 344px;
+      min-height: 274px;
       border-color: rgba(47, 129, 255, 0.86);
       box-shadow: inset 0 0 0 1px rgba(47, 129, 255, 0.2);
     }
     .recommendation-card .command-label {
-      margin: 28px 0 12px;
+      margin: 14px 0 10px;
       text-align: center;
-      font-size: 80px;
+      font-size: clamp(60px, 5.2vw, 78px);
       line-height: 0.95;
       color: #2f8cff;
       letter-spacing: 0;
@@ -1828,7 +1811,7 @@ DASHBOARD_HTML = """<!doctype html>
     .confidence-pill {
       width: max-content;
       max-width: 100%;
-      margin: 0 auto 26px;
+      margin: 0 auto 14px;
       border: 1px solid rgba(47, 129, 255, 0.8);
       border-radius: 999px;
       padding: 8px 18px;
@@ -1842,7 +1825,7 @@ DASHBOARD_HTML = """<!doctype html>
       grid-template-columns: 1fr 136px;
       gap: 18px;
       border-top: 1px solid var(--line);
-      padding-top: 18px;
+      padding-top: 14px;
     }
     .command-summary > div + div {
       border-left: 1px solid var(--line);
@@ -1874,11 +1857,11 @@ DASHBOARD_HTML = """<!doctype html>
     }
     .why-card {
       grid-column: span 3;
-      min-height: 344px;
+      min-height: 274px;
       padding: 0;
     }
     .why-card h2 {
-      min-height: 56px;
+      min-height: 44px;
       margin: 0;
       padding: 0 18px;
       border-bottom: 1px solid var(--line);
@@ -1886,15 +1869,19 @@ DASHBOARD_HTML = """<!doctype html>
     }
     .why-list {
       display: grid;
+      max-height: calc(100% - 44px);
+      overflow-y: auto;
+      scrollbar-gutter: stable;
     }
     .why-row {
       display: grid;
-      grid-template-columns: 30px minmax(0, 1fr) 22px;
-      gap: 12px;
+      grid-template-columns: 26px minmax(0, 1fr) 20px;
+      gap: 10px;
       align-items: center;
-      min-height: 52px;
-      padding: 8px 18px;
+      min-height: 46px;
+      padding: 6px 14px;
       border-bottom: 1px solid var(--line);
+      line-height: 1.25;
     }
     .why-row:last-child {
       border-bottom: 0;
@@ -1917,31 +1904,31 @@ DASHBOARD_HTML = """<!doctype html>
       font-size: 11px;
     }
     .portfolio-card {
-      min-height: 344px;
+      min-height: 274px;
     }
     .portfolio-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 10px;
+      gap: 8px;
     }
     .portfolio-grid article {
       position: relative;
-      min-height: 136px;
+      min-height: 0;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: rgba(14, 34, 48, 0.68);
-      padding: 18px 14px;
+      padding: 12px;
       display: grid;
       align-content: start;
-      gap: 8px;
+      gap: 6px;
       overflow: hidden;
     }
     .portfolio-grid article::after {
       position: absolute;
       top: 12px;
       right: 10px;
-      width: 22px;
-      height: 22px;
+      width: 20px;
+      height: 20px;
       border-radius: 8px;
       display: grid;
       place-items: center;
@@ -1968,14 +1955,14 @@ DASHBOARD_HTML = """<!doctype html>
     }
     .portfolio-grid span {
       color: var(--muted);
-      font-size: 12px;
+      font-size: 10px;
       font-weight: 800;
       text-transform: uppercase;
-      max-width: calc(100% - 28px);
+      max-width: calc(100% - 26px);
     }
     .portfolio-grid strong {
       color: #f4f8ff;
-      font-size: clamp(18px, 1.55vw, 25px);
+      font-size: clamp(15px, 1.18vw, 21px);
       line-height: 1.1;
       max-width: 100%;
       overflow: hidden;
@@ -1984,7 +1971,7 @@ DASHBOARD_HTML = """<!doctype html>
     }
     .portfolio-grid small {
       color: var(--muted);
-      font-size: 12px;
+      font-size: 10px;
       line-height: 1.25;
       max-width: 100%;
       overflow: hidden;
@@ -1992,7 +1979,7 @@ DASHBOARD_HTML = """<!doctype html>
       white-space: nowrap;
     }
     .portfolio-grid i {
-      height: 22px;
+      height: 16px;
       border-radius: 999px;
       opacity: 0.8;
       background:
@@ -2008,34 +1995,34 @@ DASHBOARD_HTML = """<!doctype html>
         );
     }
     .controls-card {
-      min-height: 224px;
+      min-height: 176px;
     }
     .control-tiles {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 12px;
+      gap: 10px;
     }
     .action-tile {
-      min-height: 74px;
+      min-height: 56px;
       display: grid;
-      grid-template-columns: 30px minmax(0, 1fr);
+      grid-template-columns: 24px minmax(0, 1fr);
       align-items: center;
-      gap: 4px 12px;
+      gap: 2px 9px;
       border-radius: 8px;
-      padding: 12px 18px;
+      padding: 9px 12px;
       background: rgba(14, 34, 48, 0.8);
       box-shadow: none;
       text-align: left;
     }
     .action-tile::before {
       grid-row: 1 / 3;
-      width: 26px;
-      height: 26px;
+      width: 22px;
+      height: 22px;
       border-radius: 999px;
       display: grid;
       place-items: center;
       font-weight: 900;
-      font-size: 13px;
+      font-size: 11px;
       background: currentColor;
       box-shadow: inset 0 0 0 26px rgba(0, 0, 0, 0.55);
       color: inherit;
@@ -2045,12 +2032,15 @@ DASHBOARD_HTML = """<!doctype html>
     .pause-tile::before { content: "\\275A\\275A"; font-size: 10px; }
     .danger-tile::before { content: "\\26A0"; }
     .action-tile strong {
-      font-size: 16px;
+      font-size: 14px;
       text-transform: uppercase;
+      line-height: 1.1;
     }
     .action-tile span {
       color: #f2f7ff;
+      font-size: 12px;
       font-weight: 500;
+      line-height: 1.15;
     }
     .approve-tile {
       border-color: rgba(50, 213, 131, 0.5);
@@ -2073,29 +2063,33 @@ DASHBOARD_HTML = """<!doctype html>
       background: rgba(255, 92, 92, 0.13);
     }
     .compact-action {
-      min-height: 34px;
+      min-height: 30px;
       justify-content: center;
+      padding: 5px 8px;
+      font-size: 12px;
     }
     #approval_reason {
-      margin: 16px 0 0;
+      margin: 8px 0 0;
       color: var(--muted);
+      font-size: 12px;
+      line-height: 1.2;
     }
     .ai-card {
       grid-column: span 7;
-      min-height: 206px;
+      min-height: 148px;
     }
     .ai-body {
       display: grid;
       grid-template-columns: 112px minmax(0, 1fr);
-      gap: 20px;
+      gap: 18px;
       align-items: center;
       border: 1px solid var(--line);
       border-radius: 8px;
-      padding: 16px;
+      padding: 12px 16px;
     }
     .bot-avatar {
-      width: 80px;
-      height: 80px;
+      width: 72px;
+      height: 72px;
       border-radius: 999px;
       display: grid;
       place-items: center;
@@ -2126,7 +2120,7 @@ DASHBOARD_HTML = """<!doctype html>
     }
     .activity-card {
       grid-column: span 5;
-      min-height: 224px;
+      min-height: 334px;
     }
     .text-link {
       min-height: 0;
@@ -2145,7 +2139,7 @@ DASHBOARD_HTML = """<!doctype html>
       gap: 12px;
     }
     .activity-card .activity-timeline {
-      max-height: 142px;
+      max-height: 268px;
       overflow: hidden;
     }
     .activity-row {
@@ -2190,61 +2184,154 @@ DASHBOARD_HTML = """<!doctype html>
     .activity-tag.action { background: rgba(255, 92, 92, 0.16); color: #ff6b72; }
     .activity-tag.system { background: rgba(50, 213, 131, 0.14); color: var(--good); }
     .activity-tag.warning { background: rgba(255, 184, 77, 0.14); color: var(--warn); }
-    body.mode-beginner section {
+    body.mode-beginner section,
+    body.mode-advanced_trader section,
+    body.mode-strategy_lab section {
       order: 30;
     }
-    body.mode-beginner .recommendation-card {
+    body.mode-beginner main,
+    body.mode-advanced_trader main,
+    body.mode-strategy_lab main {
+      grid-template-columns: repeat(15, minmax(0, 1fr));
+      grid-template-areas:
+        "r r r r r w w w w p p p p p p"
+        "c c c c c c c c c a a a a a a"
+        "x x x x x x x x x a a a a a a"
+        "k k k t t t n n n n d d g g g"
+        "z z z z z z z z z z z z z z z";
+      align-items: stretch;
+      gap: 12px;
+      max-width: 1680px;
+      padding: 0 20px 18px;
+    }
+    body.mode-beginner main {
+      grid-template-areas:
+        "r r r r r w w w w p p p p p p"
+        "c c c c c c c c c a a a a a a"
+        "x x x x x x x x x a a a a a a"
+        "k k k k k k k n n n n n n n n"
+        "z z z z z z z z z z z z z z z";
+    }
+    body.mode-beginner section[data-view~="beginner"],
+    body.mode-advanced_trader section[data-view~="beginner"],
+    body.mode-strategy_lab section[data-view~="beginner"] {
+      width: 100%;
+      min-width: 0;
+      padding: 16px;
+      font-size: 0.92rem;
+    }
+    body.mode-beginner .recommendation-card,
+    body.mode-advanced_trader .recommendation-card,
+    body.mode-strategy_lab .recommendation-card {
       order: 1;
-      grid-column: 1 / 5;
-      height: 344px;
+      grid-area: r;
+      height: 274px;
     }
-    body.mode-beginner .why-card {
+    body.mode-beginner .why-card,
+    body.mode-advanced_trader .why-card,
+    body.mode-strategy_lab .why-card {
       order: 2;
-      grid-column: 5 / 8;
-      height: 344px;
+      grid-area: w;
+      height: 274px;
     }
-    body.mode-beginner .portfolio-card {
+    body.mode-beginner .portfolio-card,
+    body.mode-advanced_trader .portfolio-card,
+    body.mode-strategy_lab .portfolio-card {
       order: 3;
-      grid-column: 8 / 13;
-      height: 344px;
+      grid-area: p;
+      height: 274px;
     }
-    body.mode-beginner .controls-card {
+    body.mode-beginner .controls-card,
+    body.mode-advanced_trader .controls-card,
+    body.mode-strategy_lab .controls-card {
       order: 4;
-      grid-column: 1 / 8;
-      height: 224px;
+      grid-area: c;
+      height: 176px;
     }
-    body.mode-beginner .activity-card {
+    body.mode-beginner .activity-card,
+    body.mode-advanced_trader .activity-card,
+    body.mode-strategy_lab .activity-card {
       order: 5;
-      grid-column: 8 / 13;
-      height: 224px;
-      grid-row: auto;
+      grid-area: a;
+      height: 334px;
     }
-    body.mode-beginner .ai-card {
+    body.mode-beginner .ai-card,
+    body.mode-advanced_trader .ai-card,
+    body.mode-strategy_lab .ai-card {
       order: 6;
-      grid-column: 1 / 13;
+      grid-area: x;
+      height: 148px;
+    }
+    body.mode-beginner section:has(#risk_safety_summary),
+    body.mode-advanced_trader section:has(#risk_safety_summary),
+    body.mode-strategy_lab section:has(#risk_safety_summary) {
+      order: 8;
+      grid-area: k;
+      height: 192px;
     }
     body.mode-beginner section:has(#risk_safety_summary) {
-      order: 8;
-      grid-column: span 6;
+      grid-column: auto / auto;
     }
-    body.mode-beginner section:has(#runtime_telemetry) {
+    body.mode-beginner section:has(#runtime_telemetry),
+    body.mode-advanced_trader section:has(#runtime_telemetry),
+    body.mode-strategy_lab section:has(#runtime_telemetry) {
       order: 9;
-      grid-column: span 6;
+      grid-area: t;
+      height: 192px;
+    }
+    body.mode-beginner section:has(#transactions),
+    body.mode-advanced_trader section:has(#transactions),
+    body.mode-strategy_lab section:has(#transactions) {
+      order: 10;
+      grid-area: n;
+      height: 192px;
     }
     body.mode-beginner section:has(#transactions) {
-      order: 10;
-      grid-column: span 6;
+      grid-column: auto / auto;
     }
     body.mode-beginner section:has(#readiness_gate),
-    body.mode-beginner section:has(#glossary) {
+    body.mode-advanced_trader section:has(#readiness_gate),
+    body.mode-strategy_lab section:has(#readiness_gate) {
       order: 11;
-      grid-column: span 6;
+      grid-area: d;
+      height: 192px;
+    }
+    body.mode-beginner section:has(#glossary),
+    body.mode-advanced_trader section:has(#glossary),
+    body.mode-strategy_lab section:has(#glossary) {
+      order: 12;
+      grid-area: g;
+      height: 192px;
+    }
+    body.mode-beginner #warning,
+    body.mode-advanced_trader #warning,
+    body.mode-strategy_lab #warning {
+      grid-area: z;
+    }
+    body.mode-advanced_trader section[data-view~="advanced_trader"]:not([data-view~="beginner"]),
+    body.mode-strategy_lab section[data-view~="advanced_trader"]:not([data-view~="beginner"]),
+    body.mode-strategy_lab section[data-view~="strategy_lab"]:not([data-view~="beginner"]) {
+      grid-area: auto;
+    }
+    body.mode-advanced_trader .span-8[data-view~="advanced_trader"]:not([data-view~="beginner"]),
+    body.mode-strategy_lab .span-8[data-view~="advanced_trader"]:not([data-view~="beginner"]),
+    body.mode-strategy_lab .span-8[data-view~="strategy_lab"]:not([data-view~="beginner"]) {
+      grid-column: span 10;
+    }
+    body.mode-advanced_trader .span-4[data-view~="advanced_trader"]:not([data-view~="beginner"]),
+    body.mode-strategy_lab .span-4[data-view~="advanced_trader"]:not([data-view~="beginner"]),
+    body.mode-strategy_lab .span-4[data-view~="strategy_lab"]:not([data-view~="beginner"]) {
+      grid-column: span 5;
+    }
+    body.mode-advanced_trader .span-6[data-view~="advanced_trader"]:not([data-view~="beginner"]),
+    body.mode-strategy_lab .span-6[data-view~="advanced_trader"]:not([data-view~="beginner"]) {
+      grid-column: span 5;
+    }
+    body.mode-strategy_lab .span-6[data-view~="strategy_lab"]:not([data-view~="beginner"]) {
+      grid-column: 1 / -1;
     }
     .status-footer {
       grid-template-columns: repeat(6, minmax(120px, 1fr));
-    }
-    body.mode-strategy_lab main {
-      grid-template-columns: repeat(12, minmax(0, 1fr));
     }
     body.mode-strategy_lab section[data-view~="strategy_lab"] {
       max-height: min(72vh, 740px);
@@ -2363,9 +2450,70 @@ DASHBOARD_HTML = """<!doctype html>
       .badges { width: 100%; }
       .badge { flex: 1 1 92px; justify-content: center; }
     }
+    body.mode-beginner main {
+      grid-template-columns: repeat(15, minmax(0, 1fr)) !important;
+      grid-template-areas:
+        "r r r r r w w w w p p p p p p"
+        "c c c c c c c c c a a a a a a"
+        "x x x x x x x x x a a a a a a"
+        "k k k k k k k n n n n n n n n"
+        "z z z z z z z z z z z z z z z" !important;
+    }
+    body.mode-advanced_trader main,
+    body.mode-strategy_lab main {
+      grid-template-columns: repeat(15, minmax(0, 1fr)) !important;
+      grid-template-areas:
+        "r r r r r w w w w p p p p p p"
+        "c c c c c c c c c a a a a a a"
+        "x x x x x x x x x a a a a a a"
+        "k k k k k k k n n n n n n n n"
+        "t t t t t t t d d d d d d d d"
+        "z z z z z z z z z z z z z z z" !important;
+    }
+    body.mode-beginner section:has(#risk_safety_summary),
+    body.mode-advanced_trader section:has(#risk_safety_summary),
+    body.mode-strategy_lab section:has(#risk_safety_summary) {
+      grid-area: k !important;
+      grid-column: 1 / 8 !important;
+      height: 192px;
+      overflow: auto;
+      scrollbar-gutter: stable;
+    }
+    body.mode-beginner section:has(#transactions),
+    body.mode-advanced_trader section:has(#transactions),
+    body.mode-strategy_lab section:has(#transactions) {
+      grid-area: n !important;
+      grid-column: 8 / 16 !important;
+      height: 192px;
+      overflow: auto;
+      scrollbar-gutter: stable;
+    }
+    body.mode-advanced_trader section:has(#runtime_telemetry),
+    body.mode-strategy_lab section:has(#runtime_telemetry) {
+      grid-area: t !important;
+      grid-column: 1 / 8 !important;
+      height: 192px;
+      overflow: auto;
+      scrollbar-gutter: stable;
+    }
+    body.mode-advanced_trader section:has(#readiness_gate),
+    body.mode-strategy_lab section:has(#readiness_gate) {
+      grid-area: d !important;
+      grid-column: 8 / 16 !important;
+      height: 192px;
+      overflow: auto;
+      scrollbar-gutter: stable;
+    }
+    body.mode-advanced_trader section:has(#glossary),
+    body.mode-strategy_lab section:has(#glossary) {
+      grid-column: 1 / -1 !important;
+      height: 192px;
+      overflow: auto;
+      scrollbar-gutter: stable;
+    }
   </style>
 </head>
-<body data-dashboard-build="dropdown-labels-v1">
+<body data-dashboard-build="shared-lower-cards-v1">
   <header class="topbar">
     <div class="brand-cluster">
       <span class="app-mark" aria-hidden="true">A</span>
@@ -2393,10 +2541,9 @@ DASHBOARD_HTML = """<!doctype html>
     </div>
     <div class="top-metric mode-metric">
       <span>Mode</span>
-      <select class="mode-select" id="ui_mode_select" aria-label="Dashboard view">
-        <option value="beginner" data-ui-mode="beginner">Beginner</option>
-        <option value="advanced_trader" data-ui-mode="advanced_trader">Advanced</option>
-        <option value="strategy_lab" data-ui-mode="strategy_lab">Strategy Lab</option>
+      <select class="mode-select" id="trading_mode_select" aria-label="Trading mode">
+        <option value="paper">Paper Trading</option>
+        <option value="live">Live Trading</option>
       </select>
       <small>
         <b id="mode">PAPER MODE</b> <b id="safe">SAFE MODE</b>
@@ -2428,18 +2575,18 @@ DASHBOARD_HTML = """<!doctype html>
       <nav class="side-nav">
         <button class="side-link mode-button" data-ui-mode="beginner">
           <span class="side-icon">DB</span>
-          <span class="side-copy"><strong>Dashboard</strong><span>Simple paper view</span></span>
+          <span class="side-copy"><strong>Beginner</strong><span>Simple paper view</span></span>
         </button>
         <button class="side-link mode-button" data-ui-mode="advanced_trader">
           <span class="side-icon">AT</span>
           <span class="side-copy">
-            <strong>Advanced Trader</strong><span>Charts and evidence</span>
+            <strong>Advanced</strong><span>Charts &amp; evidence</span>
           </span>
         </button>
         <button class="side-link mode-button" data-ui-mode="strategy_lab">
           <span class="side-icon">SL</span>
           <span class="side-copy">
-            <strong>Strategy Lab</strong><span>Research workspace</span>
+            <strong>Strategy Mode</strong><span>Research workspace</span>
           </span>
         </button>
         <button
@@ -2472,7 +2619,9 @@ DASHBOARD_HTML = """<!doctype html>
           data-panel-target="readiness_gate"
         >
           <span class="side-icon">ST</span>
-          <span class="side-copy"><strong>Settings</strong><span>Paper shell</span></span>
+          <span class="side-copy">
+            <strong>Settings</strong><span>Preferences &amp; API keys</span>
+          </span>
         </button>
       </nav>
       <button class="collapse-note" id="sidebar_toggle" type="button">Collapse</button>
@@ -2533,7 +2682,7 @@ DASHBOARD_HTML = """<!doctype html>
     <section class="span-4" data-view="advanced_trader">
       <h2>Backtest Summary</h2><dl id="backtest_summary"></dl>
     </section>
-    <section class="span-4 recommendation-card" data-view="beginner">
+    <section class="span-4 recommendation-card" data-view="beginner advanced_trader strategy_lab">
       <h2>Current Recommendation</h2>
       <div class="command-label" id="beginner_command_label">Do nothing now</div>
       <div class="confidence-pill" id="command_confidence">CONFIDENCE: not_available</div>
@@ -2577,7 +2726,7 @@ DASHBOARD_HTML = """<!doctype html>
       <div id="triggered_alerts"></div>
       <div id="alert_rules"></div>
     </section>
-    <section class="span-8" data-view="beginner advanced_trader">
+    <section class="span-8" data-view="beginner advanced_trader strategy_lab">
       <h2>Risk & Safety</h2>
       <dl id="risk_safety_summary"></dl>
       <div id="risk_safety_checks"></div>
@@ -2686,7 +2835,7 @@ DASHBOARD_HTML = """<!doctype html>
         </a>
       </div>
     </section>
-    <section class="span-5 portfolio-card" data-view="beginner advanced_trader">
+    <section class="span-5 portfolio-card" data-view="beginner advanced_trader strategy_lab">
       <h2>Portfolio Overview</h2>
       <div class="portfolio-grid">
         <article>
@@ -2712,13 +2861,21 @@ DASHBOARD_HTML = """<!doctype html>
       </div>
       <dl class="detail-dl" id="portfolio"></dl>
     </section>
-    <section class="span-7" data-view="beginner advanced_trader strategy_lab">
+    <section class="span-7" data-view="advanced_trader strategy_lab">
       <h2>Runtime Telemetry</h2>
       <dl id="runtime_telemetry"></dl>
       <div id="portfolio_sparkline"></div>
     </section>
-    <section class="span-7 controls-card" data-view="beginner advanced_trader">
-      <h2>Controls</h2>
+    <section class="span-7 controls-card" data-view="beginner advanced_trader strategy_lab">
+      <h2>
+        Controls
+        <button
+          class="text-link panel-jump"
+          data-ui-mode="advanced_trader"
+          data-panel-target="ticket_order_type"
+          type="button"
+        >Advanced</button>
+      </h2>
       <div class="control-tiles">
         <button class="action-tile approve-tile" id="approve">
           <strong>Approve</strong><span>Execute Signal</span>
@@ -2743,7 +2900,7 @@ DASHBOARD_HTML = """<!doctype html>
       </div>
       <p id="approval_reason"></p>
     </section>
-    <section class="span-6 ai-card" data-view="beginner advanced_trader">
+    <section class="span-6 ai-card" data-view="beginner advanced_trader strategy_lab">
       <h2>AI Explanation</h2>
       <div class="ai-body">
         <div class="bot-avatar" aria-hidden="true">AI</div>
@@ -2755,16 +2912,16 @@ DASHBOARD_HTML = """<!doctype html>
         <span id="explanation_confidence">Explanation Confidence: not_available</span>
       </div>
     </section>
-    <section class="span-6" data-view="beginner advanced_trader">
+    <section class="span-6" data-view="beginner advanced_trader strategy_lab">
       <h2>Paper Transactions</h2><div id="transactions"></div>
     </section>
-    <section class="span-6" data-view="beginner advanced_trader strategy_lab">
+    <section class="span-6" data-view="advanced_trader strategy_lab">
       <h2>Readiness Gate</h2><div id="readiness_gate"></div>
     </section>
-    <section class="span-6" data-view="beginner">
+    <section class="span-6" data-view="advanced_trader strategy_lab">
       <h2>Glossary</h2><div class="log"><dl id="glossary"></dl></div>
     </section>
-    <section class="span-6 activity-card" data-view="beginner advanced_trader">
+    <section class="span-6 activity-card" data-view="beginner advanced_trader strategy_lab">
       <h2>
         Recent Activity
         <button class="text-link" id="view_all_activity" type="button">View All</button>
@@ -2783,7 +2940,7 @@ DASHBOARD_HTML = """<!doctype html>
       <dl id="strategy_lab"></dl>
     </section>
     <section class="span-4" data-view="strategy_lab">
-      <h2>Required Evidence</h2><dl id="strategy_lab_evidence"></dl>
+      <h2>Required Evidence</h2><div id="strategy_lab_evidence"></div>
     </section>
     <section class="span-6" data-view="strategy_lab">
       <h2>Compare Runs</h2><div id="strategy_lab_compare"></div>
@@ -2955,7 +3112,7 @@ DASHBOARD_HTML = """<!doctype html>
       sidebarToggle: document.getElementById("sidebar_toggle"),
       viewAllActivity: document.getElementById("view_all_activity"),
       explanationConfidence: document.getElementById("explanation_confidence"),
-      modeSelect: document.getElementById("ui_mode_select"),
+      tradingModeSelect: document.getElementById("trading_mode_select"),
       modeButtons: Array.from(document.querySelectorAll(".mode-button")),
       panelJumps: Array.from(document.querySelectorAll(".panel-jump"))
     };
@@ -3271,6 +3428,7 @@ DASHBOARD_HTML = """<!doctype html>
       fields.footerExchangeStatus.textContent = market.exchange_connection || "not_configured";
       fields.footerRiskStatus.textContent =
         data.safe_mode && !data.live_trading_enabled ? "Safe Mode" : "Review";
+      fields.tradingModeSelect.value = data.live_trading_enabled ? "live" : "paper";
       const marketTone = (market.market_regime || strategy.recommendation || "").toLowerCase();
       fields.stripSignal.className = "status-pill " + (
         marketTone.includes("bull") || marketTone.includes("buy")
@@ -3323,7 +3481,6 @@ DASHBOARD_HTML = """<!doctype html>
       localStorage.setItem(UI_MODE_KEY, mode);
       document.body.classList.remove("mode-beginner", "mode-advanced_trader", "mode-strategy_lab");
       document.body.classList.add(`mode-${mode}`);
-      fields.modeSelect.value = mode;
       fields.modeButtons.forEach((button) => {
         button.classList.toggle("active", button.dataset.uiMode === mode);
       });
@@ -4447,6 +4604,15 @@ DASHBOARD_HTML = """<!doctype html>
       document.getElementById("live").textContent =
         data.live_trading_enabled ? "LIVE ON" : "LIVE OFF";
     }
+    function setTradingModeSelection() {
+      const wantsLive = fields.tradingModeSelect.value === "live";
+      const liveEnabled = document.getElementById("live").textContent === "LIVE ON";
+      if (wantsLive && !liveEnabled) {
+        fields.tradingModeSelect.value = "paper";
+        fields.warning.textContent =
+          "Live Trading is disabled by backend safety settings. Paper Trading remains active.";
+      }
+    }
     async function saveUiMode(mode) {
       setModeShell(mode);
       await fetch("/api/ui-mode", {
@@ -4741,7 +4907,7 @@ DASHBOARD_HTML = """<!doctype html>
       saveSidebarPreference(!document.body.classList.contains("sidebar-collapsed"));
     fields.notificationBell.onclick = markNotificationsRead;
     fields.viewAllActivity.onclick = viewAllActivity;
-    fields.modeSelect.onchange = () => saveUiMode(fields.modeSelect.value);
+    fields.tradingModeSelect.onchange = setTradingModeSelection;
     [
       fields.labStrategy,
       fields.labSymbol,

@@ -67,13 +67,15 @@ Start-Sleep -Seconds 2
 $page = Invoke-WebRequest -Uri $DashboardUrl -UseBasicParsing -TimeoutSec 5
 if (
     $page.Content -notmatch 'setInterval\(load, 15000\)' -or
-    $page.Content -notmatch 'data-dashboard-build="dropdown-labels-v1"' -or
+    $page.Content -notmatch 'data-dashboard-build="shared-lower-cards-v1"' -or
     $page.Content -notmatch 'class="topbar"' -or
     $page.Content -notmatch 'notification_bell' -or
     $page.Content -notmatch 'portfolio-grid' -or
-    $page.Content -notmatch '>Beginner</option>' -or
-    $page.Content -notmatch '>Advanced</option>' -or
-    $page.Content -notmatch '>Strategy Lab</option>'
+    $page.Content -notmatch '>Paper Trading</option>' -or
+    $page.Content -notmatch '>Live Trading</option>' -or
+    $page.Content -notmatch '>Beginner</strong>' -or
+    $page.Content -notmatch '>Advanced</strong>' -or
+    $page.Content -notmatch '>Strategy Mode</strong>'
 ) {
     throw "Dashboard on $DashboardPort is not the polished adaptive paper UI."
 }
