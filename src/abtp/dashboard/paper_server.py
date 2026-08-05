@@ -36,6 +36,10 @@ def make_handler(
             response = handle_dashboard_request("GET", self.path, b"", controller)
             self._send(response)
 
+        def do_HEAD(self) -> None:
+            response = handle_dashboard_request("GET", self.path, b"", controller)
+            self._send(response, include_body=False)
+
         def do_POST(self) -> None:
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length else b""
@@ -45,14 +49,15 @@ def make_handler(
         def log_message(self, _format: str, *_args: object) -> None:
             return
 
-        def _send(self, response: DashboardHttpResponse) -> None:
+        def _send(self, response: DashboardHttpResponse, *, include_body: bool = True) -> None:
             payload = response.body.encode("utf-8")
             self.send_response(response.status)
             self.send_header("Content-Type", response.content_type)
             self.send_header("Content-Length", str(len(payload)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
-            self.wfile.write(payload)
+            if include_body:
+                self.wfile.write(payload)
 
     return PaperDashboardRequestHandler
 
@@ -82,44 +87,45 @@ def handle_dashboard_request(
 
     parsed_url = urlparse(path)
     route = parsed_url.path
+    read_only_method = method in {"GET", "HEAD"}
     try:
-        if method == "GET" and route == "/":
+        if read_only_method and route == "/":
             return DashboardHttpResponse(
                 status=HTTPStatus.OK,
                 body=DASHBOARD_HTML,
                 content_type="text/html; charset=utf-8",
             )
-        if method == "GET" and route == "/api/status":
+        if read_only_method and route == "/api/status":
             query = parse_qs(parsed_url.query)
             mode = query.get("ui_mode", [None])[0]
             return _json_response(controller.state(ui_mode=mode))
-        if method == "GET" and route == "/api/readiness":
+        if read_only_method and route == "/api/readiness":
             return _json_response(_mapping_field(controller.state(), "readiness"))
-        if method == "GET" and route == "/api/activity":
+        if read_only_method and route == "/api/activity":
             query = parse_qs(parsed_url.query)
             limit = _optional_int(query.get("limit", [None])[0])
             return _json_response(controller.activity_state(limit=limit))
-        if method == "GET" and route == "/paper-report":
+        if read_only_method and route == "/paper-report":
             return DashboardHttpResponse(
                 status=HTTPStatus.OK,
                 body=_paper_report(controller),
                 content_type="text/plain; charset=utf-8",
             )
-        if method == "GET" and route == "/trader-handoff.md":
+        if read_only_method and route == "/trader-handoff.md":
             return DashboardHttpResponse(
                 status=HTTPStatus.OK,
                 body=_trader_handoff(controller),
                 content_type="text/markdown; charset=utf-8",
             )
-        if method == "GET" and route == "/trader-evidence.json":
+        if read_only_method and route == "/trader-evidence.json":
             return _json_response(_trader_evidence_bundle(controller))
-        if method == "GET" and route == "/paper-transactions.csv":
+        if read_only_method and route == "/paper-transactions.csv":
             return DashboardHttpResponse(
                 status=HTTPStatus.OK,
                 body=_transactions_csv(controller),
                 content_type="text/csv; charset=utf-8",
             )
-        if method == "GET" and route == "/trader-feedback.csv":
+        if read_only_method and route == "/trader-feedback.csv":
             return DashboardHttpResponse(
                 status=HTTPStatus.OK,
                 body=_trader_feedback_csv(controller),

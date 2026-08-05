@@ -1268,6 +1268,10 @@ def test_http_adapter_serves_ui_status_report_and_safe_actions() -> None:
     assert '"POST /api/ui-shell"' in readiness.body
     assert '"POST /api/mark-notifications-read"' in readiness.body
     assert '"POST /api/approve-paper-trade"' in readiness.body
+    readiness_head = handle_dashboard_request("HEAD", "/api/readiness", b"", controller)
+    assert readiness_head.status == HTTPStatus.OK
+    assert readiness_head.content_type == "application/json; charset=utf-8"
+    assert readiness_head.body == readiness.body
     assert report.status == HTTPStatus.OK
     assert "Generated from current local dashboard state" in report.body
     assert "deterministic sandbox fixture" not in report.body

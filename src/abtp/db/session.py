@@ -81,7 +81,12 @@ def _sqlite_path(database_url: str | Path) -> str:
 def _migration_path(migrations_path: Path | None) -> Path:
     if migrations_path is not None:
         return migrations_path
-    return Path(__file__).resolve().parents[3] / "migrations"
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        candidate = parent / "migrations"
+        if candidate.exists():
+            return candidate
+    return current.parents[3] / "migrations"
 
 
 def _ensure_migration_table(connection: Connection) -> None:
