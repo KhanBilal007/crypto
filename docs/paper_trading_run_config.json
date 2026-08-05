@@ -1,0 +1,40 @@
+{
+  "profile": "paper",
+  "safe_mode": true,
+  "enable_live_trading": false,
+  "paper_trading_enabled": true,
+  "market_data": "deterministic_sandbox_fixture",
+  "asset_focus": "BTC/USDT",
+  "strategy": "MinRiskSpotStrategyV1",
+  "initial_simulated_balance": {
+    "asset": "USDT",
+    "amount": "10000"
+  },
+  "risk_controls": {
+    "max_risk_per_trade_pct": "0.0025",
+    "max_daily_loss_pct": "0.01",
+    "max_weekly_loss_pct": "0.03",
+    "max_drawdown_halt_pct": "0.05",
+    "max_position_pct": "0.10",
+    "min_cash_reserve_pct": "0.20",
+    "stop_loss_required": true,
+    "minimum_reward_to_risk": "2.0",
+    "reject_stale_data": true,
+    "reject_degraded_data": true,
+    "max_spread_bps": "25",
+    "max_slippage_bps": "10"
+  },
+  "unsupported_markets": {
+    "leverage": false,
+    "margin": false,
+    "futures": false,
+    "options": false,
+    "withdrawals": false,
+    "transfers": false
+  },
+  "audit": {
+    "enabled": true,
+    "plaintext_secrets_allowed": false,
+    "report_path": "docs/paper_trading_status_report.md"
+  }
+}
