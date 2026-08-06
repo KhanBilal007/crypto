@@ -17,7 +17,7 @@ scripts/open_paper_dashboard.ps1
 Hidden build marker:
 
 ```html
-<body data-dashboard-build="dropdown-labels-v1">
+<body data-dashboard-build="shared-lower-cards-v1">
 ```
 
 ## Main Visual Style
@@ -94,9 +94,12 @@ Header sections from left to right:
    - Sub value: `Trend Strength: strip_trend_strength`
 
 5. Mode
-   - Dropdown id: `ui_mode_select`
+   - Dropdown id: `trading_mode_select`
    - Dropdown class: `mode-select`
-   - Current mode badges under dropdown:
+   - Trading mode choices:
+     - `Paper Trading`
+     - `Live Trading`
+   - Status badges under dropdown:
      - `PAPER MODE`
      - `SAFE MODE`
      - `LIVE OFF`
@@ -118,20 +121,27 @@ Header sections from left to right:
 Only these labels should appear in the top Mode dropdown:
 
 ```html
-<option value="beginner" data-ui-mode="beginner">Beginner</option>
-<option value="advanced_trader" data-ui-mode="advanced_trader">Advanced</option>
-<option value="strategy_lab" data-ui-mode="strategy_lab">Strategy Lab</option>
+<option value="paper">Paper Trading</option>
+<option value="live">Live Trading</option>
 ```
 
-Do not show `PAPER`, `LAB`, or `Advanced Trader` inside the top dropdown.
+Do not show `Beginner`, `Advanced`, or `Strategy Lab` inside the top dropdown.
+Those are view levels and belong in the left sidebar.
 
-The mode state values used by code remain:
+The trading mode values used by the top dropdown are:
 
 | Visible label | Internal value |
 |---|---|
+| Paper Trading | `paper` |
+| Live Trading | `live` |
+
+The UI view state values used by the left sidebar remain:
+
+| Sidebar label | Internal value |
+|---|---|
 | Beginner | `beginner` |
 | Advanced | `advanced_trader` |
-| Strategy Lab | `strategy_lab` |
+| Strategy Mode | `strategy_lab` |
 
 ## Sidebar
 
@@ -152,9 +162,9 @@ Sidebar items:
 
 | Icon | Label | Sub label | Action |
 |---|---|---|---|
-| `DB` | Dashboard | Simple paper view | Beginner mode |
-| `AT` | Advanced Trader | Charts and evidence | Advanced mode |
-| `SL` | Strategy Lab | Research workspace | Strategy Lab mode |
+| `DB` | Beginner | Simple paper view | Beginner mode |
+| `AT` | Advanced | Charts & evidence | Advanced mode |
+| `SL` | Strategy Mode | Research workspace | Strategy Lab mode |
 | `BT` | Backtesting | Embedded panel | Advanced backtest panel |
 | `R` | Reports | Paper status | Opens `/paper-report` |
 | `AL` | Alerts | Local rules | Advanced alerts panel |
@@ -197,7 +207,35 @@ Common span classes:
 
 ## Beginner Dashboard Layout
 
-Beginner mode is the main paper dashboard screen.
+Beginner, Advanced, and Strategy Mode share the same common dashboard cards.
+Advanced and Strategy Mode add extra modules below the shared layout instead of using separate
+page structures.
+
+Common cards shown in all three views:
+
+- Current Recommendation
+- Why?
+- Portfolio Overview
+- Controls
+- Recent Activity
+- AI Explanation
+- Risk & Safety
+- Paper Transactions
+
+Beginner lower row:
+
+- Risk & Safety
+- Paper Transactions
+
+Advanced and Strategy Mode also include two additional lower cards below the shared pair:
+
+- Runtime Telemetry
+- Readiness Gate
+
+Glossary remains available below the lower card group for term lookup.
+- Glossary
+
+Beginner mode is the simplest view of the shared paper dashboard screen.
 
 Desired first rows:
 
@@ -222,11 +260,11 @@ Current implemented grid rules:
 | Controls | 4 | `1 / 8` | `224px` |
 | Recent Activity | 5 | `8 / 13` | `224px` |
 | AI Explanation | 6 | `1 / 13` | auto, min `206px` |
-| Risk & Safety | 8 | span 6 | auto |
-| Runtime Telemetry | 9 | span 6 | auto |
-| Paper Transactions | 10 | span 6 | auto |
-| Readiness Gate | 11 | span 6 | auto |
-| Glossary | 11 | span 6 | auto |
+| Risk & Safety | 8 | half row | `192px` |
+| Paper Transactions | 10 | half row | `192px` |
+| Runtime Telemetry | Advanced/Strategy | lower module | `192px` |
+| Readiness Gate | Advanced/Strategy | lower module | `192px` |
+| Glossary | Advanced/Strategy | lower module | `192px` |
 
 Important layout requirements from review:
 
@@ -551,4 +589,3 @@ Relevant current line anchors:
 | Sidebar navigation | `src/abtp/dashboard/paper_server.py:2423` |
 | Beginner card layout CSS | `src/abtp/dashboard/paper_server.py:2193` |
 | Launcher stale build checks | `scripts/open_paper_dashboard.ps1:70` |
-
