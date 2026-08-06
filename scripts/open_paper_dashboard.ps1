@@ -67,10 +67,11 @@ Start-Sleep -Seconds 2
 $page = Invoke-WebRequest -Uri $DashboardUrl -UseBasicParsing -TimeoutSec 5
 if (
     $page.Content -notmatch 'setInterval\(load, 15000\)' -or
-    $page.Content -notmatch 'data-dashboard-build="shared-lower-cards-v1"' -or
+    $page.Content -notmatch 'data-dashboard-build="portfolio-tiles-v2"' -or
     $page.Content -notmatch 'class="topbar"' -or
     $page.Content -notmatch 'notification_bell' -or
     $page.Content -notmatch 'portfolio-grid' -or
+    $page.Content -notmatch '>AI Decision Checks</h2>' -or
     $page.Content -notmatch '>Paper Trading</option>' -or
     $page.Content -notmatch '>Live Trading</option>' -or
     $page.Content -notmatch '>Beginner</strong>' -or

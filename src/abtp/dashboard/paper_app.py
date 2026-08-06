@@ -21,6 +21,15 @@ from abtp.api import (
     PaperStatusResponse,
     PaperTradingAPI,
 )
+from abtp.backtesting.metrics import (
+    calculate_expectancy,
+    calculate_max_drawdown,
+    calculate_profit_factor,
+    calculate_sharpe_ratio,
+    calculate_sortino_ratio,
+    calculate_win_rate,
+    returns_from_equity,
+)
 from abtp.data import OrderBookMetrics, StreamHealth, calculate_order_book_metrics
 from abtp.db import apply_migrations, connect_database
 from abtp.domain import (
@@ -73,6 +82,11 @@ WATCHLIST_DEMO_PRICES = {
     "BTC/USDT": Decimal("104"),
     "ETH/USDT": Decimal("3120"),
     "SOL/USDT": Decimal("168"),
+}
+WATCHLIST_DEMO_PREVIOUS_DAY_PRICES = {
+    "BTC/USDT": Decimal("100"),
+    "ETH/USDT": Decimal("3000"),
+    "SOL/USDT": Decimal("160"),
 }
 READ_CONTEXT = PaperAPIRequestContext("paper-dashboard", frozenset({PaperAPIRole.READ}))
 CONTROL_CONTEXT = PaperAPIRequestContext(
@@ -238,7 +252,7 @@ class DashboardWatchlistItem:
         return {
             "symbol": self.symbol,
             "price": _str(self.price),
-            "price_change_24h_pct": _str(self.price_change_24h_pct),
+            "price_change_24h_pct": _status_str(self.price_change_24h_pct, "unavailable"),
             "source": self.source,
             "updated_at": self.updated_at.isoformat(),
             "data_health": self.data_health,
@@ -475,8 +489,9 @@ class PaperDashboardController:
             self.watchlist,
             self.selected_watchlist_symbol,
         )
+        paper_mark_price = _paper_strategy_mark_price(self.watchlist, latest=latest)
         server_time = datetime.now(UTC)
-        status = self.api.status(READ_CONTEXT, mark_price=active_watchlist_item.price)
+        status = self.api.status(READ_CONTEXT, mark_price=paper_mark_price)
         strategy_state = _strategy_state(status, latest)
         suggested_trade = _suggested_trade(latest)
         can_approve = (
@@ -516,6 +531,7 @@ class PaperDashboardController:
             "ui_mode": active_ui_mode.value,
             "ui": {
                 "mode": active_ui_mode.value,
+                "copy_source": "static_dashboard_text",
                 "available_modes": [
                     {"value": DashboardUIMode.BEGINNER.value, "label": "Beginner"},
                     {"value": DashboardUIMode.ADVANCED_TRADER.value, "label": "Advanced Trader"},
@@ -539,7 +555,10 @@ class PaperDashboardController:
                 "paper_strategy_symbol": "BTC/USDT",
                 "source": active_watchlist_item.source,
                 "current_price": _str(active_watchlist_item.price),
-                "price_change_24h_pct": _str(active_watchlist_item.price_change_24h_pct),
+                "price_change_24h_pct": _status_str(
+                    active_watchlist_item.price_change_24h_pct,
+                    "unavailable",
+                ),
                 "spread": _str(_latest_spread(latest)),
                 "data_freshness": active_watchlist_item.data_health,
                 "exchange_connection": _exchange_connection_status(
@@ -565,12 +584,17 @@ class PaperDashboardController:
             "portfolio": {
                 "starting_balance": "10000",
                 "current_equity": str(status.portfolio.equity),
+                "mark_symbol": PAIR.symbol,
+                "mark_price": _str(paper_mark_price),
+                "mark_source": "paper_strategy_symbol",
                 "cash": str(status.portfolio.cash),
                 "open_btc": str(status.portfolio.base_quantity),
                 "realized_pnl": str(status.portfolio.realized_pnl),
                 "unrealized_pnl": _unrealized_pnl(status),
                 "today_pnl": _today_pnl(cycles=self.engine.cycles, status=status),
                 "today_pnl_pct": _today_pnl_pct(cycles=self.engine.cycles, status=status),
+                "today_pnl_status": "calculated",
+                "today_pnl_source": "paper_cycle_equity",
                 "equity_sparkline": _portfolio_sparkline(self.engine.account.state.equity_history),
                 "drawdown": str(status.portfolio.drawdown_pct),
                 "risk_halts": list(_risk_halts(status)),
@@ -1391,22 +1415,6 @@ def _initial_events(engine: PaperTradingEngine) -> list[PaperDashboardEvent]:
                     occurred_at=cycle.snapshot.received_at,
                 )
             )
-    events.append(
-        PaperDashboardEvent(
-            event_type="risk_rejection_reason",
-            message="Risk rejection smoke is available for review.",
-            reason="Risk Management Engine rejects kill-switch-active paper signals.",
-            occurred_at=DEFAULT_NOW,
-        )
-    )
-    events.append(
-        PaperDashboardEvent(
-            event_type="stale_data_event",
-            message="Stale data event smoke is available for review.",
-            reason="market snapshot is stale",
-            occurred_at=DEFAULT_NOW,
-        )
-    )
     return events
 
 
@@ -1542,9 +1550,18 @@ def _demo_watchlist() -> tuple[DashboardWatchlistItem, ...]:
             data_health="healthy",
             paper_tradable=pair.symbol == PAIR.symbol,
             note=_watchlist_note(pair.symbol),
+            price_change_24h_pct=_demo_price_change_24h_pct(pair.symbol),
         )
         for pair in WATCHLIST_PAIRS
     )
+
+
+def _demo_price_change_24h_pct(symbol: str) -> Decimal | None:
+    current = WATCHLIST_DEMO_PRICES.get(symbol)
+    previous = WATCHLIST_DEMO_PREVIOUS_DAY_PRICES.get(symbol)
+    if current is None or previous is None or previous <= DECIMAL_ZERO:
+        return None
+    return (current / previous - Decimal("1")) * Decimal("100")
 
 
 def _binance_snapshots_and_daily_confirmation() -> tuple[
@@ -1628,6 +1645,7 @@ def _binance_watchlist(
                     data_health="degraded",
                     paper_tradable=pair.symbol == PAIR.symbol,
                     note=f"{_watchlist_note(pair.symbol)} Binance ticker unavailable.",
+                    price_change_24h_pct=_demo_price_change_24h_pct(pair.symbol),
                 )
             )
     return tuple(items)
@@ -1669,6 +1687,7 @@ def _refresh_binance_watchlist(
                         data_health="degraded",
                         paper_tradable=pair.symbol == PAIR.symbol,
                         note=f"{_watchlist_note(pair.symbol)} Binance ticker refresh failed.",
+                        price_change_24h_pct=_demo_price_change_24h_pct(pair.symbol),
                     )
                 )
                 continue
@@ -1902,6 +1921,12 @@ def _suggested_trade(latest: PaperTradingCycleResult | None) -> dict[str, JsonVa
     evaluation = latest.strategy_evaluation
     if evaluation is None:
         return _empty_trade("waiting for paper strategy evaluation")
+    if not _is_executable_paper_trade(latest):
+        return _empty_trade(
+            latest.skipped_reason
+            or "latest recommendation is HOLD or not executable",
+            side=evaluation.signal.direction.value.upper(),
+        )
     cycle = latest
     execution = cycle.execution_result
     stop = evaluation.plan.stop_suggestion
@@ -1922,17 +1947,28 @@ def _suggested_trade(latest: PaperTradingCycleResult | None) -> dict[str, JsonVa
     }
 
 
-def _empty_trade(reason: str) -> dict[str, JsonValue]:
+def _empty_trade(reason: str, *, side: str = "HOLD") -> dict[str, JsonValue]:
     return {
-        "side": "HOLD",
+        "side": side,
         "simulated_quantity": "0",
-        "estimated_entry": "not_available",
-        "stop_loss": "not_available",
-        "target": "not_available",
+        "estimated_entry": "not_executable",
+        "stop_loss": "not_executable",
+        "target": "not_executable",
         "risk_amount": "0",
-        "reward_to_risk": "not_available",
+        "reward_to_risk": "not_executable",
         "status": reason,
     }
+
+
+def _is_executable_paper_trade(latest: PaperTradingCycleResult | None) -> bool:
+    if latest is None or latest.strategy_evaluation is None:
+        return False
+    return (
+        latest.executed
+        and latest.execution_result is not None
+        and latest.risk_decision_status == "approved"
+        and latest.strategy_evaluation.signal.direction is not SignalDirection.HOLD
+    )
 
 
 def _transaction_state(trades: tuple[PaperTrade, ...]) -> list[JsonValue]:
@@ -1977,6 +2013,10 @@ def _watchlist_state(
         "paper_strategy_symbol": PAIR.symbol,
         "symbols": [item.as_dict(selected_symbol=selected_symbol) for item in active_items],
         "can_paper_trade_selected": selected_symbol == PAIR.symbol,
+        "active_paper_symbols": [PAIR.symbol],
+        "read_only_symbols": [
+            item.symbol for item in active_items if item.symbol != PAIR.symbol
+        ],
         "live_order_capability": False,
         "note": (
             "BTC/USDT is paper-tradable now. Other watchlist symbols are read-only "
@@ -1994,6 +2034,20 @@ def _selected_watchlist_item(
         if item.symbol == selected_symbol:
             return item
     return active_items[0]
+
+
+def _paper_strategy_mark_price(
+    items: tuple[DashboardWatchlistItem, ...],
+    *,
+    latest: PaperTradingCycleResult | None,
+) -> Decimal:
+    active_items = items or _demo_watchlist()
+    for item in active_items:
+        if item.symbol == PAIR.symbol and item.price is not None:
+            return item.price
+    if latest is not None:
+        return latest.snapshot.candle.close
+    return WATCHLIST_DEMO_PRICES[PAIR.symbol]
 
 
 def _watchlist_symbol(value: str) -> str:
@@ -2324,12 +2378,8 @@ def _runtime_telemetry(
             "8_today_pnl",
             "9_next_check_countdown",
         ],
-        "price_change_24h_pct": _str(market_item.price_change_24h_pct),
-        "price_change_24h_source": (
-            "binance_public_24hr_ticker"
-            if market_item.price_change_24h_pct is not None
-            else "not_available"
-        ),
+        "price_change_24h_pct": _status_str(market_item.price_change_24h_pct, "unavailable"),
+        "price_change_24h_source": _price_change_source(market_item),
         "trend_strength_pct": _trend_strength_pct(latest),
         "trend_strength_source": _trend_strength_source(latest),
         "exchange_connection": _exchange_connection_status(
@@ -2350,11 +2400,21 @@ def _runtime_telemetry(
         "portfolio_sparkline": _portfolio_sparkline(equity_history),
         "today_pnl": _today_pnl(cycles=cycles, status=status),
         "today_pnl_pct": _today_pnl_pct(cycles=cycles, status=status),
-        "today_pnl_source": "paper_cycle_equity_for_latest_session_date",
+        "today_pnl_source": "paper_cycle_equity",
         "next_check_at": refresh.get("next_check_at", "not_available"),
         "next_check_in_seconds": refresh.get("next_check_in_seconds", "not_available"),
         "server_time": refresh.get("server_time", "not_available"),
     }
+
+
+def _price_change_source(market_item: DashboardWatchlistItem) -> str:
+    if market_item.price_change_24h_pct is None:
+        return "unavailable"
+    if market_item.source == "binance spot":
+        return "binance_public_24hr_ticker"
+    if market_item.source.startswith("demo"):
+        return "demo_previous_day_price"
+    return market_item.source
 
 
 def _exchange_connection_status(
@@ -2418,7 +2478,7 @@ def _today_pnl(
     status: PaperStatusResponse,
 ) -> str:
     if not cycles:
-        return "not_available"
+        return "insufficient_data"
     latest = cycles[-1]
     latest_day = latest.snapshot.received_at.date()
     same_day = [cycle for cycle in cycles if cycle.snapshot.received_at.date() == latest_day]
@@ -2432,13 +2492,13 @@ def _today_pnl_pct(
     status: PaperStatusResponse,
 ) -> str:
     if not cycles:
-        return "not_available"
+        return "insufficient_data"
     latest = cycles[-1]
     latest_day = latest.snapshot.received_at.date()
     same_day = [cycle for cycle in cycles if cycle.snapshot.received_at.date() == latest_day]
     baseline = same_day[0].equity if same_day else Decimal("10000")
     if baseline <= DECIMAL_ZERO:
-        return "not_available"
+        return "insufficient_data"
     return _pct((status.portfolio.equity - baseline) / baseline)
 
 
@@ -3017,8 +3077,12 @@ def _adaptive_view_sections(
                 latest=latest,
             ),
             "position": _advanced_position_payload(status=status, latest=latest),
-            "backtest_summary": _advanced_backtest_summary(status=status, latest=latest),
-            "performance": _advanced_performance_summary(status=status),
+            "backtest_summary": _advanced_backtest_summary(
+                status=status,
+                latest=latest,
+                cycles=cycles,
+            ),
+            "performance": _advanced_performance_summary(status=status, cycles=cycles),
             "exit_review": _advanced_exit_review(
                 status=status,
                 latest=latest,
@@ -3038,6 +3102,7 @@ def _adaptive_view_sections(
             strategy=strategy_payload,
             status=status,
             latest=latest,
+            cycles=cycles,
             market=market,
             order_book=order_book,
             recent_market_trades=recent_market_trades,
@@ -3055,6 +3120,7 @@ def _strategy_lab_view(
     strategy: Mapping[str, JsonValue],
     status: PaperStatusResponse,
     latest: PaperTradingCycleResult | None,
+    cycles: tuple[PaperTradingCycleResult, ...],
     market: Mapping[str, JsonValue],
     order_book: OrderBookSnapshot | None,
     recent_market_trades: tuple[Trade, ...],
@@ -3074,6 +3140,7 @@ def _strategy_lab_view(
         strategy=strategy,
         status=status,
         latest=latest,
+        cycles=cycles,
         market=market,
         order_book=order_book,
         recent_market_trades=recent_market_trades,
@@ -3160,6 +3227,7 @@ def _strategy_lab_view(
             profile=profile,
             status=status,
             latest=latest,
+            cycles=cycles,
             selected_parameter_profile=parameter_profile,
         ),
         "limitations": _strategy_lab_limitations(run_mode, recommendation_actionable),
@@ -3289,13 +3357,18 @@ def _strategy_lab_evidence_matrix(
     strategy: Mapping[str, JsonValue],
     status: PaperStatusResponse,
     latest: PaperTradingCycleResult | None,
+    cycles: tuple[PaperTradingCycleResult, ...],
     market: Mapping[str, JsonValue],
     order_book: OrderBookSnapshot | None,
     recent_market_trades: tuple[Trade, ...],
     transactions: list[JsonValue],
 ) -> list[JsonValue]:
     explanation_missing = _strategy_lab_missing_evidence(profile, strategy)
-    backtest_summary = _advanced_backtest_summary(status=status, latest=latest)
+    backtest_summary = _advanced_backtest_summary(
+        status=status,
+        latest=latest,
+        cycles=cycles,
+    )
     checks: dict[str, tuple[bool, str, str]] = {
         "market_data": (
             latest is not None and str(market.get("current_price")) != "not_available",
@@ -3436,10 +3509,11 @@ def _strategy_lab_compare_runs(
     profile: Mapping[str, JsonValue],
     status: PaperStatusResponse,
     latest: PaperTradingCycleResult | None,
+    cycles: tuple[PaperTradingCycleResult, ...],
     selected_parameter_profile: str,
 ) -> list[JsonValue]:
-    backtest = _advanced_backtest_summary(status=status, latest=latest)
-    performance = _advanced_performance_summary(status)
+    backtest = _advanced_backtest_summary(status=status, latest=latest, cycles=cycles)
+    performance = _advanced_performance_summary(status, cycles=cycles)
     return [
         {
             "run_id": "current_paper",
@@ -3447,6 +3521,8 @@ def _strategy_lab_compare_runs(
             "parameter_profile": "default",
             "mode": "paper",
             "status": "current dashboard run",
+            "evidence_type": "paper_sample",
+            "completed_backtest": False,
             "selected": selected_parameter_profile == "default",
             "sample_size": backtest["sample_size"],
             "win_rate": backtest["win_rate"],
@@ -3458,14 +3534,17 @@ def _strategy_lab_compare_runs(
             "run_id": "defensive_profile",
             "strategy": profile["label"],
             "parameter_profile": "defensive",
-            "mode": "backtest",
-            "status": "research comparison profile",
+            "mode": "research",
+            "status": "not_run",
+            "evidence_type": "profile_config",
+            "completed_backtest": False,
+            "note": "profile_config_only",
             "selected": selected_parameter_profile == "defensive",
-            "sample_size": backtest["sample_size"],
-            "win_rate": "not_available",
-            "expectancy": "not_available",
-            "max_drawdown": backtest["max_drawdown"],
-            "paper_pnl": "research_only",
+            "sample_size": "not_run",
+            "win_rate": "not_run",
+            "expectancy": "not_run",
+            "max_drawdown": "not_run",
+            "paper_pnl": "not_run",
         },
     ]
 
@@ -3568,6 +3647,21 @@ def _advanced_chart_payload(
             )
     latest = cycles[-1] if cycles else None
     evaluation = latest.strategy_evaluation if latest is not None else None
+    executable = _is_executable_paper_trade(latest)
+    stop_loss: Decimal | str | None = (
+        evaluation.plan.stop_suggestion
+        if evaluation and executable
+        else "not_executable"
+        if evaluation
+        else None
+    )
+    target: Decimal | str | None = (
+        evaluation.plan.target_suggestion
+        if evaluation and executable
+        else "not_executable"
+        if evaluation
+        else None
+    )
     return {
         "symbol": "BTC/USDT",
         "timeframe": "1h",
@@ -3596,8 +3690,8 @@ def _advanced_chart_payload(
         "markers": markers,
         "risk_lines": {
             "entry": _str(latest.snapshot.candle.close if latest is not None else None),
-            "stop_loss": _str(evaluation.plan.stop_suggestion if evaluation else None),
-            "target": _str(evaluation.plan.target_suggestion if evaluation else None),
+            "stop_loss": _str(stop_loss),
+            "target": _str(target),
         },
     }
 
@@ -3826,6 +3920,21 @@ def _advanced_position_payload(
         else DECIMAL_ZERO
     )
     evaluation = latest.strategy_evaluation if latest is not None else None
+    executable = _is_executable_paper_trade(latest)
+    stop_loss = (
+        evaluation.plan.stop_suggestion
+        if evaluation and executable
+        else "not_executable"
+        if evaluation
+        else None
+    )
+    target = (
+        evaluation.plan.target_suggestion
+        if evaluation and executable
+        else "not_executable"
+        if evaluation
+        else None
+    )
     close_quantity = portfolio.base_quantity if has_position else DECIMAL_ZERO
     reduce_quantity = portfolio.base_quantity / Decimal("2") if has_position else DECIMAL_ZERO
     return {
@@ -3838,8 +3947,8 @@ def _advanced_position_payload(
         "unrealized_pnl": str(unrealized),
         "unrealized_pnl_pct": _pct(unrealized_pct),
         "realized_pnl": str(portfolio.realized_pnl),
-        "stop_loss": _str(evaluation.plan.stop_suggestion if evaluation else None),
-        "target": _str(evaluation.plan.target_suggestion if evaluation else None),
+        "stop_loss": _str(stop_loss),
+        "target": _str(target),
         "close_quantity": str(close_quantity),
         "reduce_quantity": str(reduce_quantity),
         "can_stage_close": has_position,
@@ -3855,17 +3964,22 @@ def _advanced_backtest_summary(
     *,
     status: PaperStatusResponse,
     latest: PaperTradingCycleResult | None,
+    cycles: tuple[PaperTradingCycleResult, ...],
 ) -> dict[str, JsonValue]:
     sample_size = status.cycles_count
+    equity_curve = _paper_equity_curve(cycles=cycles, status=status)
+    returns = returns_from_equity(equity_curve)
+    metric_status = "calculated" if returns else "insufficient_data"
     return {
-        "status": "paper_sample_only",
+        "status": "calculated_paper_sample",
         "sample_size": str(sample_size),
-        "win_rate": "not_available",
-        "expectancy": "not_available",
-        "max_drawdown": str(status.portfolio.drawdown_pct),
-        "sharpe": "not_available",
-        "sortino": "not_available",
-        "profit_factor": "not_available",
+        "metric_status": metric_status,
+        "win_rate": _metric_or_status(calculate_win_rate(returns), metric_status),
+        "expectancy": _metric_or_status(calculate_expectancy(returns), metric_status),
+        "max_drawdown": str(calculate_max_drawdown(equity_curve)),
+        "sharpe": _metric_or_status(calculate_sharpe_ratio(returns), metric_status),
+        "sortino": _metric_or_status(calculate_sortino_ratio(returns), metric_status),
+        "profit_factor": _metric_or_status(calculate_profit_factor(returns), metric_status),
         "fees": str(status.portfolio.fees_paid),
         "slippage": "paper_fill_model",
         "latest_signal_ref": _latest_signal_ref(latest),
@@ -3873,17 +3987,22 @@ def _advanced_backtest_summary(
     }
 
 
-def _advanced_performance_summary(status: PaperStatusResponse) -> dict[str, JsonValue]:
+def _advanced_performance_summary(
+    status: PaperStatusResponse,
+    *,
+    cycles: tuple[PaperTradingCycleResult, ...],
+) -> dict[str, JsonValue]:
     current_equity = status.portfolio.equity
-    total_return = (
-        current_equity / Decimal("10000") - Decimal("1") if current_equity else DECIMAL_ZERO
-    )
     return {
-        "daily": _pct(total_return),
-        "weekly": _pct(total_return),
-        "monthly": _pct(total_return),
-        "long_term": _pct(total_return),
+        "daily": _period_return_pct(cycles=cycles, status=status, days=1),
+        "weekly": _period_return_pct(cycles=cycles, status=status, days=7),
+        "monthly": _period_return_pct(cycles=cycles, status=status, days=30),
+        "long_term": _long_term_return_pct(status),
+        "period_analytics_status": "calculated",
+        "period_analytics_source": "paper_cycle_equity",
         "current_equity": str(current_equity),
+        "mark_symbol": PAIR.symbol,
+        "mark_price": _str(status.current_btc_price),
         "cash": str(status.portfolio.cash),
         "open_btc": str(status.portfolio.base_quantity),
         "realized_pnl": str(status.portfolio.realized_pnl),
@@ -3892,6 +4011,48 @@ def _advanced_performance_summary(status: PaperStatusResponse) -> dict[str, Json
         "fees_paid": str(status.portfolio.fees_paid),
         "trades": str(status.trades_count),
     }
+
+
+def _paper_equity_curve(
+    *,
+    cycles: tuple[PaperTradingCycleResult, ...],
+    status: PaperStatusResponse,
+) -> tuple[Decimal, ...]:
+    points = [Decimal("10000")]
+    points.extend(cycle.equity for cycle in cycles)
+    if not points or points[-1] != status.portfolio.equity:
+        points.append(status.portfolio.equity)
+    return tuple(points)
+
+
+def _metric_or_status(value: Decimal, status: str) -> str:
+    return str(value) if status == "calculated" else status
+
+
+def _period_return_pct(
+    *,
+    cycles: tuple[PaperTradingCycleResult, ...],
+    status: PaperStatusResponse,
+    days: int,
+) -> str:
+    if not cycles:
+        return "insufficient_data"
+    latest_at = cycles[-1].snapshot.received_at
+    cutoff = latest_at - timedelta(days=days)
+    in_window = tuple(cycle for cycle in cycles if cycle.snapshot.received_at >= cutoff)
+    if not in_window:
+        return "insufficient_data"
+    baseline = in_window[0].equity
+    if baseline <= DECIMAL_ZERO:
+        return "insufficient_data"
+    return _pct((status.portfolio.equity - baseline) / baseline)
+
+
+def _long_term_return_pct(status: PaperStatusResponse) -> str:
+    starting_balance = Decimal("10000")
+    if starting_balance <= DECIMAL_ZERO:
+        return "insufficient_data"
+    return _pct((status.portfolio.equity - starting_balance) / starting_balance)
 
 
 def _advanced_risk_safety_payload(
@@ -4281,8 +4442,8 @@ def _advanced_exit_review(
 
 def _latest_signal_ref(latest: PaperTradingCycleResult | None) -> str:
     if latest is None or latest.strategy_evaluation is None:
-        return "not_available"
-    return str(latest.strategy_evaluation.signal_ref)
+        return "no_signal_ref"
+    return _status_str(latest.strategy_evaluation.signal_ref, "no_signal_ref")
 
 
 def _sample_size_warning(sample_size: int) -> str:
@@ -5359,6 +5520,10 @@ def _latest_time(engine: PaperTradingEngine) -> datetime:
 
 def _str(value: object | None) -> str:
     return "not_available" if value is None else str(value)
+
+
+def _status_str(value: object | None, status: str) -> str:
+    return status if value is None else str(value)
 
 
 def _as_list(value: JsonValue) -> list[JsonValue]:

@@ -37,8 +37,9 @@ def test_local_dashboard_state_is_paper_safe_and_operator_readable() -> None:
     assert state["suggested_paper_trade"]["reward_to_risk"] == "2"  # type: ignore[index]
     assert state["portfolio"]["starting_balance"] == "10000"  # type: ignore[index]
     assert state["portfolio"]["today_pnl"] == "0.01381588"  # type: ignore[index]
+    assert state["portfolio"]["today_pnl_status"] == "calculated"  # type: ignore[index]
     assert len(state["portfolio"]["equity_sparkline"]) >= 4  # type: ignore[index]
-    assert state["market"]["price_change_24h_pct"] == "not_available"  # type: ignore[index]
+    assert state["market"]["price_change_24h_pct"] == "4.00"  # type: ignore[index]
     assert state["market"]["trend_strength_pct"] == "4.00"  # type: ignore[index]
     assert state["market"]["exchange_connection"] == "not_configured"  # type: ignore[index]
     assert state["market"]["latency_ms"] == "10"  # type: ignore[index]
@@ -109,6 +110,19 @@ def test_advanced_trader_view_has_chart_metrics_exit_review_and_exports(tmp_path
     assert advanced["chart"]["risk_lines"]["stop_loss"] != "not_available"  # type: ignore[index]
     assert advanced["backtest_summary"]["sample_size"] == "4"  # type: ignore[index]
     assert "Very small sample" in advanced["backtest_summary"]["sample_size_warning"]  # type: ignore[index]
+    assert advanced["backtest_summary"]["status"] == "calculated_paper_sample"  # type: ignore[index]
+    assert advanced["backtest_summary"]["metric_status"] == "calculated"  # type: ignore[index]
+    assert advanced["backtest_summary"]["win_rate"] == "0.5"  # type: ignore[index]
+    assert Decimal(str(advanced["backtest_summary"]["expectancy"])) > Decimal("0")  # type: ignore[index]
+    assert Decimal(str(advanced["backtest_summary"]["sharpe"])) > Decimal("0")  # type: ignore[index]
+    assert Decimal(str(advanced["backtest_summary"]["sortino"])) > Decimal("0")  # type: ignore[index]
+    assert Decimal(str(advanced["backtest_summary"]["profit_factor"])) > Decimal("1")  # type: ignore[index]
+    assert advanced["backtest_summary"]["latest_signal_ref"] == "no_signal_ref"  # type: ignore[index]
+    assert advanced["performance"]["daily"] == "0.000138158800"  # type: ignore[index]
+    assert advanced["performance"]["weekly"] == "0.000138158800"  # type: ignore[index]
+    assert advanced["performance"]["monthly"] == "0.000138158800"  # type: ignore[index]
+    assert advanced["performance"]["long_term"] == "0.000138158800"  # type: ignore[index]
+    assert advanced["performance"]["period_analytics_status"] == "calculated"  # type: ignore[index]
     assert int(advanced["performance"]["trades"]) >= 1  # type: ignore[arg-type,index]
     assert "recommendation" in advanced["exit_review"]  # type: ignore[index]
     assert advanced["exports"]["transactions_csv"] == "/paper-transactions.csv"  # type: ignore[index]
@@ -254,6 +268,8 @@ def test_notification_bell_unread_state_can_be_marked_read() -> None:
 def test_activity_read_model_supports_compact_and_view_all_logs() -> None:
     controller = build_default_paper_dashboard_controller()
 
+    initial = controller.activity_state()
+
     controller.set_ui_mode(DashboardUIMode.STRATEGY_LAB)
     controller.add_alert_rule(alert_type="price_above", symbol="BTC/USDT", threshold="120")
     dispatch_dashboard_action(controller, DashboardAction.REJECT_RECOMMENDATION)
@@ -267,6 +283,12 @@ def test_activity_read_model_supports_compact_and_view_all_logs() -> None:
     assert compact["view_all_route"] == "/api/activity"
     assert full["total_count"] >= 3
     assert full["visible_count"] == full["total_count"]
+    assert {
+        item["event_type"] for item in initial["items"]  # type: ignore[index]
+    } == {"paper_fill", "latest_signal"}
+    assert "smoke" not in " ".join(
+        str(item["message"]).lower() for item in initial["items"]  # type: ignore[index]
+    )
     assert {item["status_label"] for item in full["items"]} >= {"WARN", "INFO"}  # type: ignore[index]
     assert full["paper_only"] is True
 
@@ -312,6 +334,10 @@ def test_strategy_lab_profile_routes_strategy_specific_evidence(tmp_path: Path) 
     assert strategy_lab["compare_runs"][0]["run_id"] == "current_paper"  # type: ignore[index]
     assert "sample_size" in strategy_lab["compare_runs"][0]  # type: ignore[index]
     assert strategy_lab["compare_runs"][1]["parameter_profile"] == "defensive"  # type: ignore[index]
+    assert strategy_lab["compare_runs"][1]["mode"] == "research"  # type: ignore[index]
+    assert strategy_lab["compare_runs"][1]["completed_backtest"] is False  # type: ignore[index]
+    assert strategy_lab["compare_runs"][0]["win_rate"] == "0.5"  # type: ignore[index]
+    assert strategy_lab["compare_runs"][1]["status"] == "not_run"  # type: ignore[index]
     assert state["live_trading_enabled"] is False
 
 
@@ -355,8 +381,19 @@ def test_watchlist_symbol_selection_is_read_only_and_persistent(tmp_path: Path) 
     assert updated["market"]["symbol"] == "ETH/USDT"  # type: ignore[index]
     assert updated["market"]["paper_strategy_symbol"] == "BTC/USDT"  # type: ignore[index]
     assert updated["market"]["paper_tradable"] is False  # type: ignore[index]
+    assert updated["portfolio"]["mark_symbol"] == "BTC/USDT"  # type: ignore[index]
+    assert updated["portfolio"]["mark_price"] == "104"  # type: ignore[index]
+    assert updated["portfolio"]["current_equity"] == str(  # type: ignore[index]
+        controller.engine.account.equity(Decimal("104"))
+    )
+    assert updated["portfolio"]["unrealized_pnl"] == str(  # type: ignore[index]
+        (Decimal("104") - controller.engine.account.state.average_entry_price)
+        * controller.engine.account.state.base_quantity
+    )
     assert advanced["watchlist"]["selected_symbol"] == "ETH/USDT"  # type: ignore[index]
     assert advanced["watchlist"]["can_paper_trade_selected"] is False  # type: ignore[index]
+    assert advanced["watchlist"]["active_paper_symbols"] == ["BTC/USDT"]  # type: ignore[index]
+    assert "ETH/USDT" in advanced["watchlist"]["read_only_symbols"]  # type: ignore[index]
     assert restored_advanced["watchlist"]["selected_symbol"] == "ETH/USDT"  # type: ignore[index]
     assert restored["live_trading_enabled"] is False
 
@@ -736,7 +773,15 @@ def test_binance_daily_trend_blocks_hourly_buy(monkeypatch: pytest.MonkeyPatch) 
     assert state["strategy"]["recommendation"] == "HOLD"  # type: ignore[index]
     assert state["strategy"]["risk_decision"] == "not_evaluated"  # type: ignore[index]
     assert state["controls"]["can_approve_paper_trade"] is False  # type: ignore[index]
+    assert state["suggested_paper_trade"]["stop_loss"] == "not_executable"  # type: ignore[index]
+    assert state["suggested_paper_trade"]["target"] == "not_executable"  # type: ignore[index]
+    assert state["suggested_paper_trade"]["reward_to_risk"] == "not_executable"  # type: ignore[index]
     assert "1d trend blocks paper buy" in state["strategy"]["explanation"]  # type: ignore[index]
+    advanced = state["views"]["advanced_trader"]  # type: ignore[index]
+    assert advanced["chart"]["risk_lines"]["stop_loss"] == "not_executable"  # type: ignore[index]
+    assert advanced["chart"]["risk_lines"]["target"] == "not_executable"  # type: ignore[index]
+    assert advanced["position"]["stop_loss"] == "not_executable"  # type: ignore[index]
+    assert advanced["position"]["target"] == "not_executable"  # type: ignore[index]
     beginner = state["views"]["beginner"]  # type: ignore[index]
     assert beginner["command"]["label"] == "Do nothing now"  # type: ignore[index]
     assert beginner["command"]["approval_enabled"] is False  # type: ignore[index]
@@ -1257,7 +1302,7 @@ def test_http_adapter_serves_ui_status_report_and_safe_actions() -> None:
     assert '"mode": "PAPER MODE"' in status.body
     assert '"views": {' in status.body
     assert '"runtime_telemetry": {' in status.body
-    assert '"price_change_24h_pct": "not_available"' in status.body
+    assert '"price_change_24h_pct": "4.00"' in status.body
     assert '"navigation": [' in status.body
     assert '"activity": {' in status.body
     readiness = handle_dashboard_request("GET", "/api/readiness", b"", controller)
