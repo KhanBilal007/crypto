@@ -5037,6 +5037,25 @@ def _save_paper_account_state(controller: PaperDashboardController) -> None:
 
 
 def _restore_paper_account_state(controller: PaperDashboardController) -> None:
+    if controller.state_path is not None:
+        path = Path(controller.state_path)
+        if path.exists():
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(payload, Mapping):
+                    raise ValueError("paper state file must contain a JSON object")
+                _restore_paper_payload(controller, payload, source_ref=str(path))
+                return
+            except (OSError, ValueError, TypeError) as exc:
+                controller.events.insert(
+                    0,
+                    PaperDashboardEvent(
+                        event_type="paper_state_restore_failed",
+                        message="Saved paper wallet could not be restored; checking SQLite.",
+                        reason=str(exc),
+                        occurred_at=_latest_time(controller.engine),
+                    ),
+                )
     if controller.db_path is not None:
         try:
             with _paper_dashboard_repository(controller.db_path) as repository:
@@ -5049,31 +5068,11 @@ def _restore_paper_account_state(controller: PaperDashboardController) -> None:
                 0,
                 PaperDashboardEvent(
                     event_type="paper_sqlite_restore_failed",
-                    message="SQLite paper wallet could not be restored; checking JSON fallback.",
+                    message="SQLite paper wallet could not be restored; fresh paper wallet loaded.",
                     reason=str(exc),
                     occurred_at=_latest_time(controller.engine),
                 ),
             )
-    if controller.state_path is None:
-        return
-    path = Path(controller.state_path)
-    if not path.exists():
-        return
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(payload, Mapping):
-            raise ValueError("paper state file must contain a JSON object")
-        _restore_paper_payload(controller, payload, source_ref=str(path))
-    except (OSError, ValueError, TypeError) as exc:
-        controller.events.insert(
-            0,
-            PaperDashboardEvent(
-                event_type="paper_state_restore_failed",
-                message="Saved paper wallet could not be restored; fresh paper wallet loaded.",
-                reason=str(exc),
-                occurred_at=_latest_time(controller.engine),
-            ),
-        )
 
 
 def _paper_dashboard_state_payload(controller: PaperDashboardController) -> dict[str, JsonValue]:

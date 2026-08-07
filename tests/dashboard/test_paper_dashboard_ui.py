@@ -16,9 +16,10 @@ from abtp.dashboard import (
     paper_app,
 )
 from abtp.dashboard.paper_server import handle_dashboard_request, smoke_test
-from abtp.db import connect_database
+from abtp.db import apply_migrations, connect_database
 from abtp.domain import Asset, AssetPair, Exchange, OrderBookLevel, OrderBookSnapshot
 from abtp.exchanges import Ticker
+from abtp.repositories import PaperDashboardRepository
 from abtp.risk import RiskPolicy
 
 
@@ -956,6 +957,99 @@ def test_staged_paper_orders_can_be_restored(tmp_path: Path) -> None:
     assert restored_orders == staged_orders
     assert restored_orders[0]["order_type"] == "oco"  # type: ignore[index]
     assert restored["live_trading_enabled"] is False
+
+
+def test_saved_json_state_takes_precedence_over_sqlite_state(tmp_path: Path) -> None:
+    state_path = tmp_path / "paper_dashboard_state.json"
+    db_path = tmp_path / "paper_dashboard.sqlite"
+    state_path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "updated_at": "2026-08-07T00:00:00+00:00",
+                "market_data_source": "demo",
+                "ui_preferences": {
+                    "mode": "beginner",
+                    "selected_watchlist_symbol": "BTC/USDT",
+                    "sidebar_collapsed": False,
+                    "notification_last_seen_at": "",
+                    "strategy_lab": {
+                        "strategy": "min_risk_spot_v1",
+                        "symbol": "BTC/USDT",
+                        "timeframe": "4h",
+                        "run_mode": "backtest",
+                        "parameter_profile": "defensive",
+                    },
+                },
+                "account": {
+                    "cash": "1000",
+                    "base_quantity": "0",
+                    "average_entry_price": "0",
+                    "realized_pnl": "0",
+                    "fees_paid": "0",
+                    "equity_history": ["1000"],
+                },
+                "trades": [],
+                "open_paper_orders": [],
+                "alert_rules": [],
+                "journal_entries": [],
+                "trader_feedback": [],
+                "chart_drawings": [],
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    connection = connect_database(db_path)
+    try:
+        apply_migrations(connection)
+        PaperDashboardRepository(connection).save_state_payload(
+            {
+                "version": 2,
+                "updated_at": "2026-08-07T01:00:00+00:00",
+                "market_data_source": "demo",
+                "ui_preferences": {
+                    "mode": "advanced_trader",
+                    "selected_watchlist_symbol": "BTC/USDT",
+                    "sidebar_collapsed": True,
+                    "notification_last_seen_at": "",
+                    "strategy_lab": {
+                        "strategy": "min_risk_spot_v1",
+                        "symbol": "BTC/USDT",
+                        "timeframe": "4h",
+                        "run_mode": "backtest",
+                        "parameter_profile": "defensive",
+                    },
+                },
+                "account": {
+                    "cash": "13246.97",
+                    "base_quantity": "0",
+                    "average_entry_price": "0",
+                    "realized_pnl": "0",
+                    "fees_paid": "0",
+                    "equity_history": ["13246.97"],
+                },
+                "trades": [],
+                "open_paper_orders": [],
+                "alert_rules": [],
+                "journal_entries": [],
+                "trader_feedback": [],
+                "chart_drawings": [],
+            }
+        )
+    finally:
+        connection.close()
+
+    restored = build_default_paper_dashboard_controller(
+        state_path=str(state_path),
+        db_path=str(db_path),
+    ).state()
+
+    assert restored["portfolio"]["current_equity"] == "1000"  # type: ignore[index]
+    assert restored["portfolio"]["cash"] == "1000"  # type: ignore[index]
+    assert restored["ui_mode"] == "beginner"
+    assert restored["logs"][0]["event_type"] == "paper_state_restored"  # type: ignore[index]
 
 
 def test_approved_paper_wallet_can_be_restored_from_sqlite(tmp_path: Path) -> None:
