@@ -17,7 +17,7 @@ scripts/open_paper_dashboard.ps1
 Hidden build marker:
 
 ```html
-<body data-dashboard-build="shared-lower-cards-v1">
+<body data-dashboard-build="portfolio-tiles-v2">
 ```
 
 ## Main Visual Style
@@ -214,7 +214,7 @@ page structures.
 Common cards shown in all three views:
 
 - Current Recommendation
-- Why?
+- AI Decision Checks
 - Portfolio Overview
 - Controls
 - Recent Activity
@@ -241,7 +241,7 @@ Desired first rows:
 
 ```text
 Row 1:
-[Current Recommendation] [Why?] [Portfolio Overview]
+[Current Recommendation] [AI Decision Checks] [Portfolio Overview]
 
 Row 2:
 [Controls] [Recent Activity]
@@ -255,7 +255,7 @@ Current implemented grid rules:
 | Card | Order | Grid columns | Height |
 |---|---:|---|---:|
 | Current Recommendation | 1 | `1 / 5` | `344px` |
-| Why? | 2 | `5 / 8` | `344px` |
+| AI Decision Checks | 2 | `5 / 8` | `344px` |
 | Portfolio Overview | 3 | `8 / 13` | `344px` |
 | Controls | 4 | `1 / 8` | `224px` |
 | Recent Activity | 5 | `8 / 13` | `224px` |
@@ -268,11 +268,12 @@ Current implemented grid rules:
 
 Important layout requirements from review:
 
-- Current Recommendation, Why, and Portfolio Overview must line up from the bottom.
+- Current Recommendation, AI Decision Checks, and Portfolio Overview must line up from the bottom.
 - Controls and Recent Activity must sit side by side on the same row.
 - Card heights in the same row should match.
 - All labels must stay visible.
 - Portfolio numbers must fit inside the portfolio cards.
+- Portfolio must keep the same four primary values; improve fitting by resizing/refitting the internal metric cards and typography.
 - Avoid large empty right-side space.
 
 ## Current Recommendation Card
@@ -288,7 +289,7 @@ Main elements:
 | Element | Id/class | Example |
 |---|---|---|
 | Recommendation label | `beginner_command_label` | `BUY`, `WAIT`, `REJECTED` |
-| Confidence pill | `command_confidence` | `CONFIDENCE: 50%` |
+| Confidence pill | `command_confidence` | `CONFIDENCE: 50%` or `CONFIDENCE: Not required` |
 | Reason label | static | `Reason` |
 | Reason text | `command_reason` | Market explanation |
 | Countdown label | static | `Next Check In` |
@@ -297,17 +298,18 @@ Main elements:
 
 Visual notes:
 
-- Uses large centered recommendation text.
+- Uses clear centered recommendation text.
 - Positive label should use green.
 - Negative/rejected label should use red.
 - Confidence pill is blue-accented.
+- When there is no executable signal, show confidence as `Not required` instead of `0%`.
 
-## Why Card
+## AI Decision Checks Card
 
 Visible title:
 
 ```text
-Why?
+AI Decision Checks
 ```
 
 Main container:
@@ -552,18 +554,21 @@ Use this checklist after every UI edit:
 2. Close old preview tabs such as `8766`, `8767`, `8768`, `8769`, `8770`, or `8771`.
 3. Press `Ctrl+F5` if Chrome shows an old dropdown.
 4. Confirm top Mode dropdown shows:
+   - `Paper Trading`
+   - `Live Trading`
+5. Confirm left sidebar view options show:
    - `Beginner`
    - `Advanced`
-   - `Strategy Lab`
-5. Confirm the first three cards align:
+   - `Strategy Mode`
+6. Confirm the first three cards align:
    - Current Recommendation
-   - Why?
+   - AI Decision Checks
    - Portfolio Overview
-6. Confirm Controls and Recent Activity are on the same row.
-7. Confirm no major blank space appears on the right.
-8. Confirm portfolio digits fit inside their boxes.
-9. Confirm all sidebar labels are readable.
-10. Confirm bottom footer/status labels are readable.
+7. Confirm Controls and Recent Activity are on the same row.
+8. Confirm no major blank space appears on the right.
+9. Confirm portfolio digits fit inside their boxes.
+10. Confirm all sidebar labels are readable.
+11. Confirm bottom footer/status labels are readable.
 
 ## Source Locations
 

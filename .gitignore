@@ -12,3 +12,4 @@ dist/
 docs/paper_dashboard.sqlite
 docs/paper_dashboard_state.json
 solana_smart_money_bot/data/bot.db
+docs/paper_dashboard_backups/

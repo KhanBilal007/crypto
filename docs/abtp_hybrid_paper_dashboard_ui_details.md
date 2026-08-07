@@ -73,7 +73,7 @@ ABTP Application Shell
 ├── Left Sidebar Navigation
 ├── Main Dashboard Grid
 │   ├── Current Recommendation
-│   ├── Why?
+│   ├── AI Decision Checks
 │   ├── Portfolio Overview
 │   ├── Controls
 │   ├── Recent Activity
@@ -821,7 +821,7 @@ The dashboard uses a 12-column responsive grid.
 
 ```text
 Row 1:
-[Current Recommendation] [Why?] [Portfolio Overview]
+[Current Recommendation] [AI Decision Checks] [Portfolio Overview]
 
 Row 2:
 [Controls                 ] [Recent Activity]
@@ -838,7 +838,7 @@ Row 4:
 | Card | Columns | Approx height |
 |---|---|---:|
 | Current Recommendation | `1 / 5` | `274px` |
-| Why? | `5 / 8` | `274px` |
+| AI Decision Checks | `5 / 8` | `274px` |
 | Portfolio Overview | `8 / 13` | `274px` |
 | Controls | `1 / 8` | `176px` |
 | Recent Activity | `8 / 13` | `334px` |
@@ -959,15 +959,16 @@ It must not be interpreted as trade-entry confidence.
 - WAIT is normally non-actionable.
 - Approve must be disabled unless the backend explicitly says the signal is actionable.
 - Disabled reason must be available to the user.
+- When there is no executable signal, show confidence as `Not required` instead of `0%`.
 
 ---
 
-# 17. Why? Card
+# 17. AI Decision Checks Card
 
 Visible title:
 
 ```text
-WHY?
+AI DECISION CHECKS
 ```
 
 Main container:
@@ -1052,6 +1053,8 @@ Eye/privacy icon appears in the header.
 | Today's P/L % | `portfolio_today_pct` |
 
 ## Metric tile style
+
+Portfolio must keep the same four primary values. Improve fitting by resizing/refitting the internal metric cards and typography, not by removing portfolio fields.
 
 ```css
 .portfolio-tile {
@@ -1636,7 +1639,7 @@ It must include:
 ```text
 Beginner
 ├── Current Recommendation
-├── Why?
+├── AI Decision Checks
 ├── Portfolio Overview
 ├── Controls
 ├── Recent Activity

@@ -1915,18 +1915,21 @@ DASHBOARD_HTML = """<!doctype html>
     .portfolio-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-rows: repeat(2, minmax(100px, 1fr));
       gap: 8px;
+      height: calc(100% - 34px);
+      min-height: 0;
     }
     .portfolio-grid article {
       position: relative;
-      min-height: 0;
+      min-height: 100px;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: rgba(14, 34, 48, 0.68);
-      padding: 12px;
+      padding: 13px 14px;
       display: grid;
       align-content: start;
-      gap: 6px;
+      gap: 7px;
       overflow: hidden;
     }
     .portfolio-grid article::after {
@@ -1961,14 +1964,15 @@ DASHBOARD_HTML = """<!doctype html>
     }
     .portfolio-grid span {
       color: var(--muted);
-      font-size: 10px;
+      font-size: 11px;
       font-weight: 800;
       text-transform: uppercase;
       max-width: calc(100% - 26px);
+      line-height: 1.2;
     }
     .portfolio-grid strong {
       color: #f4f8ff;
-      font-size: clamp(15px, 1.18vw, 21px);
+      font-size: clamp(17px, 1.28vw, 24px);
       line-height: 1.1;
       max-width: 100%;
       overflow: hidden;
@@ -1977,7 +1981,7 @@ DASHBOARD_HTML = """<!doctype html>
     }
     .portfolio-grid small {
       color: var(--muted);
-      font-size: 10px;
+      font-size: 11px;
       line-height: 1.25;
       max-width: 100%;
       overflow: hidden;
@@ -2519,7 +2523,7 @@ DASHBOARD_HTML = """<!doctype html>
     }
   </style>
 </head>
-<body data-dashboard-build="shared-lower-cards-v1">
+<body data-dashboard-build="portfolio-tiles-v2">
   <header class="topbar">
     <div class="brand-cluster">
       <span class="app-mark" aria-hidden="true">A</span>
@@ -2811,7 +2815,7 @@ DASHBOARD_HTML = """<!doctype html>
       <p id="position_message"></p>
     </section>
     <section class="span-4 why-card" data-view="beginner advanced_trader strategy_lab">
-      <h2>Why?</h2>
+      <h2>AI Decision Checks</h2>
       <div class="why-list" id="why_list"></div>
       <dl class="detail-dl" id="strategy"></dl>
     </section>
@@ -3306,7 +3310,9 @@ DASHBOARD_HTML = """<!doctype html>
     function renderCommandCard(command, strategy, refresh) {
       const rawLabel = (command && command.label) || "WAIT";
       const label = /do nothing|hold/i.test(rawLabel) ? "WAIT" : rawLabel;
-      const confidence = asPercentFromConfidence(strategy && strategy.ai_confidence);
+      const confidence = command && command.actionable
+        ? asPercentFromConfidence(strategy && strategy.ai_confidence)
+        : "Not required";
       const reason =
         (strategy && strategy.explanation)
         || (command && command.plain_status)
