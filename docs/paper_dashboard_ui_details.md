@@ -17,7 +17,7 @@ scripts/open_paper_dashboard.ps1
 Hidden build marker:
 
 ```html
-<body data-dashboard-build="portfolio-tiles-v2">
+<body data-dashboard-build="desktop-site-pan-v2">
 ```
 
 ## Main Visual Style

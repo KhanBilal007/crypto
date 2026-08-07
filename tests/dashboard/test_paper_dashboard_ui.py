@@ -78,6 +78,38 @@ def test_dashboard_initial_cash_can_be_overridden_for_fresh_paper_restart(
     assert state["live_trading_enabled"] is False
 
 
+def test_restored_paper_wallet_uses_restored_equity_as_today_pnl_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("ABTP_PAPER_INITIAL_CASH", raising=False)
+    monkeypatch.delenv("ABTP_PAPER_DB_PATH", raising=False)
+    state_path = tmp_path / "paper_dashboard_state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "account": {
+                    "average_entry_price": "0",
+                    "base_quantity": "0",
+                    "cash": "1000",
+                    "equity_history": ["1000"],
+                    "fees_paid": "0",
+                    "realized_pnl": "0",
+                },
+                "trades": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    controller = build_default_paper_dashboard_controller(state_path=str(state_path))
+    state = controller.state()
+
+    assert state["portfolio"]["starting_balance"] == "1000"  # type: ignore[index]
+    assert state["portfolio"]["today_pnl"] == "0"  # type: ignore[index]
+    assert state["runtime_telemetry"]["today_pnl"] == "0"  # type: ignore[index]
+
+
 def test_adaptive_view_shell_splits_status_into_role_sections() -> None:
     controller = build_default_paper_dashboard_controller()
 

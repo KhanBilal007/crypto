@@ -494,7 +494,10 @@ class PaperDashboardController:
         status = self.api.status(READ_CONTEXT, mark_price=paper_mark_price)
         strategy_state = _strategy_state(status, latest)
         suggested_trade = _suggested_trade(latest)
-        starting_balance = self.engine.account.config.initial_cash
+        starting_balance = _paper_pnl_baseline(
+            configured_initial_cash=self.engine.account.config.initial_cash,
+            equity_history=self.engine.account.state.equity_history,
+        )
         can_approve = (
             latest is not None
             and latest.executed
@@ -645,6 +648,7 @@ class PaperDashboardController:
                 refresh=refresh,
                 requested_source=self.requested_market_data_source,
                 equity_history=self.engine.account.state.equity_history,
+                starting_balance=starting_balance,
             ),
             "logs": list(event.as_dict() for event in self.events),
             "transactions": _transaction_state(self.api.trades(READ_CONTEXT)),
@@ -2371,6 +2375,7 @@ def _runtime_telemetry(
     refresh: Mapping[str, JsonValue],
     requested_source: str,
     equity_history: tuple[Decimal, ...],
+    starting_balance: Decimal,
 ) -> dict[str, JsonValue]:
     return {
         "module_numbers": [
@@ -2404,8 +2409,16 @@ def _runtime_telemetry(
         "app_version": app_metadata.get("version", "not_available"),
         "app_version_source": app_metadata.get("version_source", "not_available"),
         "portfolio_sparkline": _portfolio_sparkline(equity_history),
-        "today_pnl": _today_pnl(cycles=cycles, status=status),
-        "today_pnl_pct": _today_pnl_pct(cycles=cycles, status=status),
+        "today_pnl": _today_pnl(
+            cycles=cycles,
+            status=status,
+            starting_balance=starting_balance,
+        ),
+        "today_pnl_pct": _today_pnl_pct(
+            cycles=cycles,
+            status=status,
+            starting_balance=starting_balance,
+        ),
         "today_pnl_source": "paper_cycle_equity",
         "next_check_at": refresh.get("next_check_at", "not_available"),
         "next_check_in_seconds": refresh.get("next_check_in_seconds", "not_available"),
@@ -2486,11 +2499,7 @@ def _today_pnl(
 ) -> str:
     if not cycles:
         return "insufficient_data"
-    latest = cycles[-1]
-    latest_day = latest.snapshot.received_at.date()
-    same_day = [cycle for cycle in cycles if cycle.snapshot.received_at.date() == latest_day]
-    baseline = same_day[0].equity if same_day else starting_balance
-    return str(status.portfolio.equity - baseline)
+    return str(status.portfolio.equity - starting_balance)
 
 
 def _today_pnl_pct(
@@ -2501,13 +2510,17 @@ def _today_pnl_pct(
 ) -> str:
     if not cycles:
         return "insufficient_data"
-    latest = cycles[-1]
-    latest_day = latest.snapshot.received_at.date()
-    same_day = [cycle for cycle in cycles if cycle.snapshot.received_at.date() == latest_day]
-    baseline = same_day[0].equity if same_day else starting_balance
-    if baseline <= DECIMAL_ZERO:
+    if starting_balance <= DECIMAL_ZERO:
         return "insufficient_data"
-    return _pct((status.portfolio.equity - baseline) / baseline)
+    return _pct((status.portfolio.equity - starting_balance) / starting_balance)
+
+
+def _paper_pnl_baseline(
+    *,
+    configured_initial_cash: Decimal,
+    equity_history: tuple[Decimal, ...],
+) -> Decimal:
+    return equity_history[0] if equity_history else configured_initial_cash
 
 
 def _portfolio_sparkline(equity_history: tuple[Decimal, ...]) -> list[JsonValue]:
