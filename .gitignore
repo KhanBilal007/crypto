@@ -11,3 +11,4 @@ dist/
 .env
 docs/paper_dashboard.sqlite
 docs/paper_dashboard_state.json
+docs/paper_dashboard_backups/

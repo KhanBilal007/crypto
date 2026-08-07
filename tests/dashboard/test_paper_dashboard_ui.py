@@ -63,6 +63,21 @@ def test_local_dashboard_state_is_paper_safe_and_operator_readable() -> None:
     assert "not financial advice" in state["warning"]
 
 
+def test_dashboard_initial_cash_can_be_overridden_for_fresh_paper_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ABTP_PAPER_INITIAL_CASH", "1000")
+    monkeypatch.delenv("ABTP_PAPER_STATE_PATH", raising=False)
+    monkeypatch.delenv("ABTP_PAPER_DB_PATH", raising=False)
+
+    controller = build_default_paper_dashboard_controller()
+    state = controller.state()
+
+    assert state["portfolio"]["starting_balance"] == "1000"  # type: ignore[index]
+    assert state["safe_mode"] is True
+    assert state["live_trading_enabled"] is False
+
+
 def test_adaptive_view_shell_splits_status_into_role_sections() -> None:
     controller = build_default_paper_dashboard_controller()
 
@@ -284,10 +299,12 @@ def test_activity_read_model_supports_compact_and_view_all_logs() -> None:
     assert full["total_count"] >= 3
     assert full["visible_count"] == full["total_count"]
     assert {
-        item["event_type"] for item in initial["items"]  # type: ignore[index]
+        item["event_type"]
+        for item in initial["items"]  # type: ignore[index]
     } == {"paper_fill", "latest_signal"}
     assert "smoke" not in " ".join(
-        str(item["message"]).lower() for item in initial["items"]  # type: ignore[index]
+        str(item["message"]).lower()
+        for item in initial["items"]  # type: ignore[index]
     )
     assert {item["status_label"] for item in full["items"]} >= {"WARN", "INFO"}  # type: ignore[index]
     assert full["paper_only"] is True

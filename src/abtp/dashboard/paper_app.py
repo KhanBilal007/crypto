@@ -7,7 +7,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -494,6 +494,7 @@ class PaperDashboardController:
         status = self.api.status(READ_CONTEXT, mark_price=paper_mark_price)
         strategy_state = _strategy_state(status, latest)
         suggested_trade = _suggested_trade(latest)
+        starting_balance = self.engine.account.config.initial_cash
         can_approve = (
             latest is not None
             and latest.executed
@@ -582,7 +583,7 @@ class PaperDashboardController:
             "strategy": strategy_state,
             "suggested_paper_trade": suggested_trade,
             "portfolio": {
-                "starting_balance": "10000",
+                "starting_balance": str(starting_balance),
                 "current_equity": str(status.portfolio.equity),
                 "mark_symbol": PAIR.symbol,
                 "mark_price": _str(paper_mark_price),
@@ -591,8 +592,16 @@ class PaperDashboardController:
                 "open_btc": str(status.portfolio.base_quantity),
                 "realized_pnl": str(status.portfolio.realized_pnl),
                 "unrealized_pnl": _unrealized_pnl(status),
-                "today_pnl": _today_pnl(cycles=self.engine.cycles, status=status),
-                "today_pnl_pct": _today_pnl_pct(cycles=self.engine.cycles, status=status),
+                "today_pnl": _today_pnl(
+                    cycles=self.engine.cycles,
+                    status=status,
+                    starting_balance=starting_balance,
+                ),
+                "today_pnl_pct": _today_pnl_pct(
+                    cycles=self.engine.cycles,
+                    status=status,
+                    starting_balance=starting_balance,
+                ),
                 "today_pnl_status": "calculated",
                 "today_pnl_source": "paper_cycle_equity",
                 "equity_sparkline": _portfolio_sparkline(self.engine.account.state.equity_history),
@@ -1329,7 +1338,7 @@ def build_default_paper_dashboard_controller(
             max_drawdown_halt_pct=Decimal("0.05"),
             block_degraded_data=True,
         ),
-        account=PaperTradingAccount(PaperAccountConfig(initial_cash=Decimal("10000"))),
+        account=PaperTradingAccount(PaperAccountConfig(initial_cash=_paper_initial_cash())),
         risk_policy=risk_policy
         or RiskPolicy(
             max_risk_per_trade_pct=Decimal("0.0025"),
@@ -1923,8 +1932,7 @@ def _suggested_trade(latest: PaperTradingCycleResult | None) -> dict[str, JsonVa
         return _empty_trade("waiting for paper strategy evaluation")
     if not _is_executable_paper_trade(latest):
         return _empty_trade(
-            latest.skipped_reason
-            or "latest recommendation is HOLD or not executable",
+            latest.skipped_reason or "latest recommendation is HOLD or not executable",
             side=evaluation.signal.direction.value.upper(),
         )
     cycle = latest
@@ -2014,9 +2022,7 @@ def _watchlist_state(
         "symbols": [item.as_dict(selected_symbol=selected_symbol) for item in active_items],
         "can_paper_trade_selected": selected_symbol == PAIR.symbol,
         "active_paper_symbols": [PAIR.symbol],
-        "read_only_symbols": [
-            item.symbol for item in active_items if item.symbol != PAIR.symbol
-        ],
+        "read_only_symbols": [item.symbol for item in active_items if item.symbol != PAIR.symbol],
         "live_order_capability": False,
         "note": (
             "BTC/USDT is paper-tradable now. Other watchlist symbols are read-only "
@@ -2476,13 +2482,14 @@ def _today_pnl(
     *,
     cycles: tuple[PaperTradingCycleResult, ...],
     status: PaperStatusResponse,
+    starting_balance: Decimal = Decimal("10000"),
 ) -> str:
     if not cycles:
         return "insufficient_data"
     latest = cycles[-1]
     latest_day = latest.snapshot.received_at.date()
     same_day = [cycle for cycle in cycles if cycle.snapshot.received_at.date() == latest_day]
-    baseline = same_day[0].equity if same_day else Decimal("10000")
+    baseline = same_day[0].equity if same_day else starting_balance
     return str(status.portfolio.equity - baseline)
 
 
@@ -2490,13 +2497,14 @@ def _today_pnl_pct(
     *,
     cycles: tuple[PaperTradingCycleResult, ...],
     status: PaperStatusResponse,
+    starting_balance: Decimal = Decimal("10000"),
 ) -> str:
     if not cycles:
         return "insufficient_data"
     latest = cycles[-1]
     latest_day = latest.snapshot.received_at.date()
     same_day = [cycle for cycle in cycles if cycle.snapshot.received_at.date() == latest_day]
-    baseline = same_day[0].equity if same_day else Decimal("10000")
+    baseline = same_day[0].equity if same_day else starting_balance
     if baseline <= DECIMAL_ZERO:
         return "insufficient_data"
     return _pct((status.portfolio.equity - baseline) / baseline)
@@ -3993,11 +4001,12 @@ def _advanced_performance_summary(
     cycles: tuple[PaperTradingCycleResult, ...],
 ) -> dict[str, JsonValue]:
     current_equity = status.portfolio.equity
+    equity_curve = _paper_equity_curve(cycles=cycles, status=status)
     return {
         "daily": _period_return_pct(cycles=cycles, status=status, days=1),
         "weekly": _period_return_pct(cycles=cycles, status=status, days=7),
         "monthly": _period_return_pct(cycles=cycles, status=status, days=30),
-        "long_term": _long_term_return_pct(status),
+        "long_term": _long_term_return_pct(status, starting_balance=equity_curve[0]),
         "period_analytics_status": "calculated",
         "period_analytics_source": "paper_cycle_equity",
         "current_equity": str(current_equity),
@@ -4018,8 +4027,8 @@ def _paper_equity_curve(
     cycles: tuple[PaperTradingCycleResult, ...],
     status: PaperStatusResponse,
 ) -> tuple[Decimal, ...]:
-    points = [Decimal("10000")]
-    points.extend(cycle.equity for cycle in cycles)
+    points = [cycles[0].equity] if cycles else [status.portfolio.equity]
+    points.extend(cycle.equity for cycle in cycles[1:])
     if not points or points[-1] != status.portfolio.equity:
         points.append(status.portfolio.equity)
     return tuple(points)
@@ -4048,8 +4057,11 @@ def _period_return_pct(
     return _pct((status.portfolio.equity - baseline) / baseline)
 
 
-def _long_term_return_pct(status: PaperStatusResponse) -> str:
-    starting_balance = Decimal("10000")
+def _long_term_return_pct(
+    status: PaperStatusResponse,
+    *,
+    starting_balance: Decimal = Decimal("10000"),
+) -> str:
     if starting_balance <= DECIMAL_ZERO:
         return "insufficient_data"
     return _pct((status.portfolio.equity - starting_balance) / starting_balance)
@@ -5299,7 +5311,7 @@ def _paper_account_state_from_mapping(payload: Mapping[str, JsonValue]) -> Paper
     if not isinstance(equity_history_payload, list):
         equity_history_payload = []
     equity_history = tuple(_decimal(value) for value in equity_history_payload)
-    cash = _decimal(payload.get("cash", "10000"))
+    cash = _decimal(payload.get("cash", str(_paper_initial_cash())))
     return PaperAccountState(
         cash=cash,
         base_quantity=_decimal(payload.get("base_quantity", "0")),
@@ -5422,6 +5434,17 @@ def _chart_drawing_from_mapping(payload: Mapping[str, JsonValue]) -> DashboardCh
 
 def _decimal(value: object) -> Decimal:
     return value if isinstance(value, Decimal) else Decimal(str(value))
+
+
+def _paper_initial_cash() -> Decimal:
+    raw = os.getenv("ABTP_PAPER_INITIAL_CASH", "10000")
+    try:
+        value = Decimal(raw)
+    except InvalidOperation as exc:
+        raise ValueError("ABTP_PAPER_INITIAL_CASH must be a decimal value") from exc
+    if value <= DECIMAL_ZERO:
+        raise ValueError("ABTP_PAPER_INITIAL_CASH must be positive")
+    return value
 
 
 def _optional_decimal_from_json(value: object | None) -> Decimal | None:

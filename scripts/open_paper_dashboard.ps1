@@ -7,6 +7,7 @@ $DashboardUrl = "http://127.0.0.1:$DashboardPort/"
 $StatusUrl = "${DashboardUrl}api/status"
 $env:PYTHONPATH = Join-Path $ProjectRoot "src"
 $env:ABTP_MARKET_DATA_SOURCE = "binance"
+$env:ABTP_PAPER_INITIAL_CASH = "1000"
 $env:ABTP_PAPER_STATE_PATH = Join-Path $ProjectRoot "docs\paper_dashboard_state.json"
 $env:ABTP_PAPER_DB_PATH = Join-Path $ProjectRoot "docs\paper_dashboard.sqlite"
 
