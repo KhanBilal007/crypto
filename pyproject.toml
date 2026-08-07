@@ -33,6 +33,7 @@ addopts = "--strict-markers --strict-config"
 line-length = 100
 target-version = "py311"
 src = ["src", "tests"]
+extend-exclude = ["solana_smart_money_bot"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
