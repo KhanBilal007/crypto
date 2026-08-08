@@ -1048,6 +1048,8 @@ def test_saved_json_state_takes_precedence_over_sqlite_state(tmp_path: Path) -> 
 
     assert restored["portfolio"]["current_equity"] == "1000"  # type: ignore[index]
     assert restored["portfolio"]["cash"] == "1000"  # type: ignore[index]
+    assert restored["portfolio"]["today_pnl"] == "0"  # type: ignore[index]
+    assert restored["portfolio"]["today_pnl_pct"] == "0"  # type: ignore[index]
     assert restored["ui_mode"] == "beginner"
     assert restored["logs"][0]["event_type"] == "paper_state_restored"  # type: ignore[index]
 

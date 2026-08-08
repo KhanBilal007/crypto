@@ -476,6 +476,7 @@ class PaperDashboardController:
     trader_feedback: list[DashboardTraderFeedback] = field(default_factory=list)
     chart_drawings: list[DashboardChartDrawing] = field(default_factory=list)
     events: list[PaperDashboardEvent] = field(default_factory=list)
+    session_starting_equity: Decimal | None = None
     market_refresh_interval_seconds: int = 15
     last_market_refresh_at: datetime | None = None
 
@@ -494,7 +495,11 @@ class PaperDashboardController:
         status = self.api.status(READ_CONTEXT, mark_price=paper_mark_price)
         strategy_state = _strategy_state(status, latest)
         suggested_trade = _suggested_trade(latest)
-        starting_balance = self.engine.account.config.initial_cash
+        starting_balance = (
+            self.session_starting_equity
+            if self.session_starting_equity is not None
+            else self.engine.account.config.initial_cash
+        )
         can_approve = (
             latest is not None
             and latest.executed
@@ -596,11 +601,13 @@ class PaperDashboardController:
                     cycles=self.engine.cycles,
                     status=status,
                     starting_balance=starting_balance,
+                    session_baseline=self.session_starting_equity,
                 ),
                 "today_pnl_pct": _today_pnl_pct(
                     cycles=self.engine.cycles,
                     status=status,
                     starting_balance=starting_balance,
+                    session_baseline=self.session_starting_equity,
                 ),
                 "today_pnl_status": "calculated",
                 "today_pnl_source": "paper_cycle_equity",
@@ -1350,8 +1357,6 @@ def build_default_paper_dashboard_controller(
             require_stop_loss=True,
         ),
     )
-    for snapshot in snapshots:
-        engine.on_market_update(snapshot)
     controller = PaperDashboardController(
         engine=engine,
         api=PaperTradingAPI(engine),
@@ -1362,9 +1367,18 @@ def build_default_paper_dashboard_controller(
         order_book_snapshot=order_book,
         recent_market_trades=recent_market_trades,
         watchlist=watchlist,
-        events=[*source_events, *_initial_events(engine)],
+        events=[*source_events],
     )
-    _restore_paper_account_state(controller)
+    for snapshot in snapshots:
+        engine.on_market_update(snapshot)
+    controller.events.extend(_initial_events(engine))
+    if _restore_paper_account_state(controller):
+        latest = engine.cycles[-1] if engine.cycles else None
+        paper_mark_price = _paper_strategy_mark_price(watchlist, latest=latest)
+        controller.session_starting_equity = controller.api.status(
+            READ_CONTEXT,
+            mark_price=paper_mark_price,
+        ).portfolio.equity
     return controller
 
 
@@ -2483,9 +2497,12 @@ def _today_pnl(
     cycles: tuple[PaperTradingCycleResult, ...],
     status: PaperStatusResponse,
     starting_balance: Decimal = Decimal("10000"),
+    session_baseline: Decimal | None = None,
 ) -> str:
     if not cycles:
         return "insufficient_data"
+    if session_baseline is not None:
+        return str(status.portfolio.equity - session_baseline)
     latest = cycles[-1]
     latest_day = latest.snapshot.received_at.date()
     same_day = [cycle for cycle in cycles if cycle.snapshot.received_at.date() == latest_day]
@@ -2498,9 +2515,15 @@ def _today_pnl_pct(
     cycles: tuple[PaperTradingCycleResult, ...],
     status: PaperStatusResponse,
     starting_balance: Decimal = Decimal("10000"),
+    session_baseline: Decimal | None = None,
 ) -> str:
     if not cycles:
         return "insufficient_data"
+    if session_baseline is not None:
+        baseline = session_baseline
+        if baseline <= DECIMAL_ZERO:
+            return "insufficient_data"
+        return _pct((status.portfolio.equity - baseline) / baseline)
     latest = cycles[-1]
     latest_day = latest.snapshot.received_at.date()
     same_day = [cycle for cycle in cycles if cycle.snapshot.received_at.date() == latest_day]
@@ -5036,7 +5059,7 @@ def _save_paper_account_state(controller: PaperDashboardController) -> None:
         path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def _restore_paper_account_state(controller: PaperDashboardController) -> None:
+def _restore_paper_account_state(controller: PaperDashboardController) -> bool:
     if controller.state_path is not None:
         path = Path(controller.state_path)
         if path.exists():
@@ -5045,7 +5068,7 @@ def _restore_paper_account_state(controller: PaperDashboardController) -> None:
                 if not isinstance(payload, Mapping):
                     raise ValueError("paper state file must contain a JSON object")
                 _restore_paper_payload(controller, payload, source_ref=str(path))
-                return
+                return True
             except (OSError, ValueError, TypeError) as exc:
                 controller.events.insert(
                     0,
@@ -5062,7 +5085,7 @@ def _restore_paper_account_state(controller: PaperDashboardController) -> None:
                 payload = repository.load_latest_state_payload()
             if payload is not None:
                 _restore_paper_payload(controller, payload, source_ref=controller.db_path)
-                return
+                return True
         except (OSError, ValueError, TypeError) as exc:
             controller.events.insert(
                 0,
@@ -5073,6 +5096,7 @@ def _restore_paper_account_state(controller: PaperDashboardController) -> None:
                     occurred_at=_latest_time(controller.engine),
                 ),
             )
+    return False
 
 
 def _paper_dashboard_state_payload(controller: PaperDashboardController) -> dict[str, JsonValue]:
