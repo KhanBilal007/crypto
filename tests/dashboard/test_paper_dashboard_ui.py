@@ -380,14 +380,40 @@ def test_strategy_lab_profile_routes_strategy_specific_evidence(tmp_path: Path) 
         "risk_engine",
         "paper_evaluation_gate",
     }
-    assert strategy_lab["compare_runs"][0]["run_id"] == "current_paper"  # type: ignore[index]
-    assert "sample_size" in strategy_lab["compare_runs"][0]  # type: ignore[index]
-    assert strategy_lab["compare_runs"][1]["parameter_profile"] == "defensive"  # type: ignore[index]
-    assert strategy_lab["compare_runs"][1]["mode"] == "research"  # type: ignore[index]
-    assert strategy_lab["compare_runs"][1]["completed_backtest"] is False  # type: ignore[index]
-    assert strategy_lab["compare_runs"][0]["win_rate"] == "0.5"  # type: ignore[index]
-    assert strategy_lab["compare_runs"][1]["status"] == "not_run"  # type: ignore[index]
+    assert len(strategy_lab["compare_runs"]) == 4  # type: ignore[index]
+    assert {row["mode"] for row in strategy_lab["compare_runs"]} == {"shadow_paper"}  # type: ignore[index]
+    assert {row["strategy_key"] for row in strategy_lab["compare_runs"]} == {  # type: ignore[index]
+        "min_risk_spot_v1",
+        "trend_pullback_v1",
+        "breakout_v1",
+        "support_resistance_rebound_v1",
+    }
+    assert all("sample_size" in row for row in strategy_lab["compare_runs"])  # type: ignore[index]
+    assert all(row["completed_backtest"] is False for row in strategy_lab["compare_runs"])  # type: ignore[index]
     assert state["live_trading_enabled"] is False
+
+
+def test_strategy_lab_lists_four_shadow_test_strategies(tmp_path: Path) -> None:
+    controller = build_default_paper_dashboard_controller(
+        state_path=str(tmp_path / "paper_dashboard_state.json")
+    )
+
+    state = controller.state(ui_mode=DashboardUIMode.STRATEGY_LAB)
+    strategy_lab = state["views"]["strategy_lab"]  # type: ignore[index]
+    selectors = strategy_lab["selectors"]  # type: ignore[index]
+    strategy_values = {item["value"] for item in selectors["strategies"]}  # type: ignore[index]
+    compare_runs = strategy_lab["compare_runs"]  # type: ignore[index]
+
+    assert strategy_values == {
+        "min_risk_spot_v1",
+        "trend_pullback_v1",
+        "breakout_v1",
+        "support_resistance_rebound_v1",
+    }
+    assert strategy_lab["shadow_test"]["account_count"] == "4"  # type: ignore[index]
+    assert {row["strategy_key"] for row in compare_runs} == strategy_values  # type: ignore[index]
+    assert all(row["mode"] == "shadow_paper" for row in compare_runs)  # type: ignore[index]
+    assert all("risk_score" in row for row in compare_runs)  # type: ignore[index]
 
 
 def test_strategy_lab_selection_can_be_saved_without_live_permissions(tmp_path: Path) -> None:
@@ -410,7 +436,7 @@ def test_strategy_lab_selection_can_be_saved_without_live_permissions(tmp_path: 
     assert updated_lab["selection"]["timeframe"] == "4h"  # type: ignore[index]
     assert updated_lab["selection"]["run_mode"] == "backtest"  # type: ignore[index]
     assert updated_lab["recommendation_actionable"] is False  # type: ignore[index]
-    assert updated_lab["compare_runs"][1]["selected"] is True  # type: ignore[index]
+    assert all(row["selected"] is False for row in updated_lab["compare_runs"])  # type: ignore[index]
     assert updated_lab["parameter_config"]["minimum_reward_to_risk"] == "2.5"  # type: ignore[index]
     assert restored_lab["selection"]["parameter_profile"] == "defensive"  # type: ignore[index]
     assert restored["live_trading_enabled"] is False
@@ -1330,6 +1356,10 @@ def test_http_adapter_serves_ui_status_report_and_safe_actions() -> None:
     assert "Module Routing" in page.body
     assert "Parameter Config" in page.body
     assert "Compare Runs" in page.body
+    assert "Paper P/L" in page.body
+    assert "Latest Signal" in page.body
+    assert "Risk Score" in page.body
+    assert "Max Drawdown" in page.body
     assert "Readiness Gate" in page.body
     assert "paper demo ready" in page.body
     assert "live capital ready" in page.body

@@ -4385,8 +4385,9 @@ DASHBOARD_HTML = """<!doctype html>
         <table>
           <thead>
             <tr>
-              <th>Run</th><th>Strategy</th><th>Parameters</th><th>Mode</th>
-              <th>Sample</th><th>Expectancy</th><th>Drawdown</th><th>Status</th>
+              <th>Run</th><th>Strategy</th><th>Mode</th><th>Sample</th>
+              <th>Paper P/L</th><th>Equity</th><th>Win Rate</th><th>Trades</th>
+              <th>Latest Signal</th><th>Risk Score</th><th>Max Drawdown</th><th>Status</th>
             </tr>
           </thead>
           <tbody>
@@ -4394,10 +4395,14 @@ DASHBOARD_HTML = """<!doctype html>
               <tr>
                 <td>${item.run_id}${item.selected ? " *" : ""}</td>
                 <td>${item.strategy}</td>
-                <td>${item.parameter_profile}</td>
                 <td>${item.mode}</td>
                 <td>${item.sample_size || "not_available"}</td>
-                <td>${item.expectancy || "not_available"}</td>
+                <td>${item.paper_pnl || "not_available"}</td>
+                <td>${item.current_equity || "not_available"}</td>
+                <td>${item.win_rate || "not_available"}</td>
+                <td>${item.trade_count || "not_available"}</td>
+                <td>${item.latest_signal || "not_available"}</td>
+                <td>${item.risk_score || "not_available"}</td>
                 <td>${item.max_drawdown || "not_available"}</td>
                 <td>${item.status}</td>
               </tr>`).join("")}
