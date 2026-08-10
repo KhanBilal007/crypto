@@ -2347,12 +2347,20 @@ DASHBOARD_HTML = """<!doctype html>
       max-height: min(72vh, 740px);
     }
     @media (max-width: 1180px) {
+      html,
+      body {
+        overflow-x: auto;
+      }
+      body {
+        min-width: 1316px;
+      }
       .topbar {
         position: static;
         grid-template-columns:
           172px 174px minmax(160px, 1fr) minmax(220px, 1.05fr)
           150px 168px 146px 56px;
         min-width: 1120px;
+        width: max-content;
       }
       .brand-cluster,
       .pair-tile,
@@ -2366,7 +2374,13 @@ DASHBOARD_HTML = """<!doctype html>
         padding: 12px;
       }
       .market-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 0 12px; }
-      .dashboard-shell { grid-template-columns: 196px minmax(0, 1fr); }
+      .dashboard-shell {
+        grid-template-columns: 196px minmax(1120px, 1fr);
+        min-width: 1316px;
+      }
+      .dashboard-content {
+        overflow-x: visible;
+      }
       .side-link { grid-template-columns: 28px minmax(0, 1fr); justify-items: stretch; }
       .side-copy { display: grid; }
       .collapse-note { display: block; }
@@ -2521,9 +2535,266 @@ DASHBOARD_HTML = """<!doctype html>
       overflow: auto;
       scrollbar-gutter: stable;
     }
+    @media (max-width: 760px) {
+      html,
+      body {
+        overflow-x: hidden;
+      }
+      body {
+        min-width: 0;
+      }
+      .topbar {
+        position: static;
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        min-width: 0 !important;
+        width: 100% !important;
+      }
+      .brand-cluster,
+      .pair-tile,
+      .top-metric,
+      .notification-bell {
+        min-height: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--line-soft);
+        padding: 10px 12px;
+      }
+      .brand-cluster {
+        grid-column: 1 / -1;
+        min-height: 58px;
+        padding: 9px 14px;
+      }
+      .pair-tile,
+      .top-metric {
+        min-height: 62px;
+        align-items: center;
+      }
+      .notification-bell {
+        display: none;
+      }
+      .brand-cluster h1 {
+        font-size: 23px;
+      }
+      .brand-cluster .app-kicker {
+        font-size: 7px;
+        margin-top: 3px;
+      }
+      .brand-cluster .app-mark,
+      .brand-cluster .app-mark::before {
+        width: 31px;
+        height: 31px;
+      }
+      .brand-cluster .app-mark::after {
+        inset: 9px;
+      }
+      .coin-mark {
+        width: 31px;
+        height: 31px;
+        box-shadow: 0 0 0 4px rgba(247, 147, 26, 0.12);
+      }
+      .top-metric > span,
+      .top-metric small,
+      .pair-tile span {
+        font-size: 10px;
+      }
+      .top-metric strong,
+      .pair-tile strong {
+        font-size: 14px;
+      }
+      .price-metric strong {
+        font-size: 18px;
+      }
+      .header-tools {
+        align-items: stretch;
+      }
+      .mode-select {
+        min-width: 0;
+        width: 100%;
+        height: 34px;
+        font-size: 13px;
+      }
+      .badges {
+        gap: 4px;
+      }
+      .badge {
+        font-size: 8px;
+      }
+      .dashboard-shell {
+        grid-template-columns: 1fr !important;
+        min-height: auto;
+        min-width: 0 !important;
+      }
+      .dashboard-content {
+        overflow-x: hidden;
+      }
+      .sidebar {
+        position: static;
+        height: auto;
+        padding: 8px 10px;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+        overflow-x: auto;
+      }
+      .side-nav {
+        display: flex;
+        grid-template-columns: none;
+        gap: 8px;
+        padding: 0;
+        min-width: max-content;
+      }
+      .side-link {
+        flex: 0 0 132px;
+        min-height: 46px;
+        padding: 7px 8px;
+        grid-template-columns: 24px minmax(0, 1fr);
+        gap: 7px;
+      }
+      .side-icon {
+        width: 24px;
+        height: 24px;
+        font-size: 10px;
+      }
+      .side-copy strong,
+      .side-copy span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .side-copy strong {
+        font-size: 13px;
+        line-height: 1.1;
+        white-space: nowrap;
+      }
+      .side-copy span {
+        display: none;
+      }
+      .collapse-note {
+        display: none;
+      }
+      main,
+      body.mode-beginner main,
+      body.mode-advanced_trader main,
+      body.mode-strategy_lab main {
+        grid-template-columns: 1fr !important;
+        grid-template-areas: none !important;
+        min-width: 0 !important;
+        width: 100%;
+        max-width: 100%;
+        padding: 10px;
+        gap: 10px;
+      }
+      main > section,
+      body.mode-beginner main > section,
+      body.mode-advanced_trader main > section,
+      body.mode-strategy_lab main > section {
+        grid-area: auto !important;
+        grid-column: 1 / -1 !important;
+        width: 100%;
+        height: auto;
+        min-height: 0;
+        padding: 14px;
+      }
+      body.mode-beginner .recommendation-card,
+      body.mode-advanced_trader .recommendation-card,
+      body.mode-strategy_lab .recommendation-card {
+        min-height: 256px;
+        order: 1 !important;
+      }
+      body.mode-beginner .why-card,
+      body.mode-advanced_trader .why-card,
+      body.mode-strategy_lab .why-card {
+        min-height: 250px;
+        padding: 0;
+        order: 2 !important;
+      }
+      body.mode-beginner .portfolio-card,
+      body.mode-advanced_trader .portfolio-card,
+      body.mode-strategy_lab .portfolio-card {
+        min-height: 318px;
+        order: 3 !important;
+      }
+      body.mode-beginner .controls-card,
+      body.mode-advanced_trader .controls-card,
+      body.mode-strategy_lab .controls-card {
+        min-height: 318px;
+        order: 5 !important;
+      }
+      body.mode-beginner .activity-card,
+      body.mode-advanced_trader .activity-card,
+      body.mode-strategy_lab .activity-card {
+        min-height: 300px;
+        order: 7 !important;
+      }
+      body.mode-beginner .ai-card,
+      body.mode-advanced_trader .ai-card,
+      body.mode-strategy_lab .ai-card {
+        min-height: 210px;
+        order: 6 !important;
+      }
+      body.mode-beginner section:has(#risk_safety_summary),
+      body.mode-advanced_trader section:has(#risk_safety_summary),
+      body.mode-strategy_lab section:has(#risk_safety_summary) {
+        order: 4 !important;
+      }
+      body.mode-beginner section:has(#transactions),
+      body.mode-advanced_trader section:has(#transactions),
+      body.mode-strategy_lab section:has(#transactions) {
+        order: 8 !important;
+      }
+      body.mode-advanced_trader section:has(#runtime_telemetry),
+      body.mode-strategy_lab section:has(#runtime_telemetry) {
+        order: 9 !important;
+      }
+      body.mode-advanced_trader section:has(#readiness_gate),
+      body.mode-strategy_lab section:has(#readiness_gate) {
+        order: 10 !important;
+      }
+      body.mode-advanced_trader section:has(#glossary),
+      body.mode-strategy_lab section:has(#glossary) {
+        order: 11 !important;
+      }
+      body.mode-beginner section:has(#risk_safety_summary),
+      body.mode-advanced_trader section:has(#risk_safety_summary),
+      body.mode-strategy_lab section:has(#risk_safety_summary),
+      body.mode-beginner section:has(#transactions),
+      body.mode-advanced_trader section:has(#transactions),
+      body.mode-strategy_lab section:has(#transactions),
+      body.mode-advanced_trader section:has(#runtime_telemetry),
+      body.mode-strategy_lab section:has(#runtime_telemetry),
+      body.mode-advanced_trader section:has(#readiness_gate),
+      body.mode-strategy_lab section:has(#readiness_gate),
+      body.mode-advanced_trader section:has(#glossary),
+      body.mode-strategy_lab section:has(#glossary) {
+        grid-area: auto !important;
+        grid-column: 1 / -1 !important;
+        height: 220px;
+      }
+      .portfolio-grid {
+        grid-template-rows: repeat(2, minmax(112px, 1fr));
+      }
+      .portfolio-grid strong {
+        font-size: clamp(18px, 5.1vw, 23px);
+      }
+      .control-tiles {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .control-tile {
+        min-height: 84px;
+        padding: 12px 10px;
+      }
+      .control-tile strong {
+        font-size: 16px;
+      }
+      .ai-body {
+        grid-template-columns: 64px minmax(0, 1fr);
+      }
+      .status-footer {
+        position: static;
+        grid-template-columns: 1fr !important;
+      }
+    }
   </style>
 </head>
-<body data-dashboard-build="portfolio-tiles-v2">
+<body data-dashboard-build="desktop-site-pan-v2">
   <header class="topbar">
     <div class="brand-cluster">
       <span class="app-mark" aria-hidden="true">A</span>
@@ -4120,8 +4391,9 @@ DASHBOARD_HTML = """<!doctype html>
         <table>
           <thead>
             <tr>
-              <th>Run</th><th>Strategy</th><th>Parameters</th><th>Mode</th>
-              <th>Sample</th><th>Expectancy</th><th>Drawdown</th><th>Status</th>
+              <th>Run</th><th>Strategy</th><th>Mode</th><th>Sample</th>
+              <th>Paper P/L</th><th>Equity</th><th>Win Rate</th><th>Trades</th>
+              <th>Latest Signal</th><th>Risk Score</th><th>Max Drawdown</th><th>Status</th>
             </tr>
           </thead>
           <tbody>
@@ -4129,10 +4401,14 @@ DASHBOARD_HTML = """<!doctype html>
               <tr>
                 <td>${item.run_id}${item.selected ? " *" : ""}</td>
                 <td>${item.strategy}</td>
-                <td>${item.parameter_profile}</td>
                 <td>${item.mode}</td>
                 <td>${item.sample_size || "not_available"}</td>
-                <td>${item.expectancy || "not_available"}</td>
+                <td>${item.paper_pnl || "not_available"}</td>
+                <td>${item.current_equity || "not_available"}</td>
+                <td>${item.win_rate || "not_available"}</td>
+                <td>${item.trade_count || "not_available"}</td>
+                <td>${item.latest_signal || "not_available"}</td>
+                <td>${item.risk_score || "not_available"}</td>
                 <td>${item.max_drawdown || "not_available"}</td>
                 <td>${item.status}</td>
               </tr>`).join("")}

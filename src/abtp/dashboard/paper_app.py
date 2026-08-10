@@ -62,12 +62,15 @@ from abtp.paper.engine import PaperMarketSnapshot, PaperTradingCycleResult
 from abtp.repositories import PaperDashboardRepository
 from abtp.risk import RiskPolicy
 from abtp.strategies import (
+    BreakoutStrategy,
     MinRiskSpotStrategyV1,
     StrategyConfig,
     StrategyContext,
     StrategyEvaluation,
     StrategyPlugin,
     StrategySignalPlan,
+    SupportResistanceReboundStrategy,
+    TrendPullbackStrategy,
 )
 
 DECIMAL_ZERO = Decimal("0")
@@ -476,9 +479,9 @@ class PaperDashboardController:
     trader_feedback: list[DashboardTraderFeedback] = field(default_factory=list)
     chart_drawings: list[DashboardChartDrawing] = field(default_factory=list)
     events: list[PaperDashboardEvent] = field(default_factory=list)
-    session_starting_equity: Decimal | None = None
     market_refresh_interval_seconds: int = 15
     last_market_refresh_at: datetime | None = None
+    shadow_engines: dict[str, PaperTradingEngine] = field(default_factory=dict)
 
     def state(self, *, ui_mode: DashboardUIMode | str | None = None) -> dict[str, JsonValue]:
         """Return a browser-safe dashboard state payload."""
@@ -495,10 +498,9 @@ class PaperDashboardController:
         status = self.api.status(READ_CONTEXT, mark_price=paper_mark_price)
         strategy_state = _strategy_state(status, latest)
         suggested_trade = _suggested_trade(latest)
-        starting_balance = (
-            self.session_starting_equity
-            if self.session_starting_equity is not None
-            else self.engine.account.config.initial_cash
+        starting_balance = _paper_pnl_baseline(
+            configured_initial_cash=self.engine.account.config.initial_cash,
+            equity_history=self.engine.account.state.equity_history,
         )
         can_approve = (
             latest is not None
@@ -601,13 +603,11 @@ class PaperDashboardController:
                     cycles=self.engine.cycles,
                     status=status,
                     starting_balance=starting_balance,
-                    session_baseline=self.session_starting_equity,
                 ),
                 "today_pnl_pct": _today_pnl_pct(
                     cycles=self.engine.cycles,
                     status=status,
                     starting_balance=starting_balance,
-                    session_baseline=self.session_starting_equity,
                 ),
                 "today_pnl_status": "calculated",
                 "today_pnl_source": "paper_cycle_equity",
@@ -652,6 +652,7 @@ class PaperDashboardController:
                 refresh=refresh,
                 requested_source=self.requested_market_data_source,
                 equity_history=self.engine.account.state.equity_history,
+                starting_balance=starting_balance,
             ),
             "logs": list(event.as_dict() for event in self.events),
             "transactions": _transaction_state(self.api.trades(READ_CONTEXT)),
@@ -680,6 +681,8 @@ class PaperDashboardController:
                 "run_mode": self.strategy_lab_run_mode.value,
                 "parameter_profile": self.strategy_lab_parameter_profile,
             },
+            shadow_engines=self.shadow_engines,
+            mark_price=paper_mark_price,
         )
         payload["readiness"] = _dashboard_readiness_gate(
             payload=payload,
@@ -709,6 +712,31 @@ class PaperDashboardController:
             self.order_book_snapshot = adapter.order_book(PAIR)
         except (AttributeError, ExchangeAdapterError, OSError, ValueError):
             return
+        try:
+            candles = adapter.candles(PAIR, "1h", 1)
+        except (AttributeError, ExchangeAdapterError, OSError, ValueError):
+            return
+        if not candles:
+            return
+        metrics = calculate_order_book_metrics(self.order_book_snapshot)
+        snapshot = PaperMarketSnapshot(
+            candle=candles[-1],
+            order_book_metrics=metrics,
+            health=StreamHealth(
+                is_connected=True,
+                is_stale=False,
+                is_degraded=False,
+                disconnect_count=0,
+                last_message_at=checked_at,
+                latency_ms=10,
+                stale_after=timedelta(seconds=30),
+            ),
+            received_at=max(candles[-1].closed_at, checked_at),
+        )
+        _apply_new_snapshot(self.engine, snapshot)
+        for shadow_engine in self.shadow_engines.values():
+            _apply_new_snapshot(shadow_engine, snapshot)
+        _save_paper_account_state(self)
 
     def set_ui_mode(self, mode: DashboardUIMode | str) -> dict[str, JsonValue]:
         """Persist the preferred dashboard shell mode without changing trading permissions."""
@@ -1334,29 +1362,21 @@ def build_default_paper_dashboard_controller(
         recent_market_trades,
         watchlist,
     ) = _dashboard_inputs(requested_market_source)
-    strategy: StrategyPlugin = MinRiskSpotStrategyV1()
-    if daily_confirmation is not None:
-        strategy = MultiTimeframePaperStrategy(strategy, daily_confirmation)
-    engine = PaperTradingEngine(
+    active_risk_policy = risk_policy or _dashboard_risk_policy()
+    strategy: StrategyPlugin = _with_daily_confirmation(MinRiskSpotStrategyV1(), daily_confirmation)
+    engine = _paper_engine_for_strategy(
         strategy=strategy,
-        config=PaperTradingConfig(
-            timeframe="1h",
-            order_quantity=Decimal("0.01"),
-            max_drawdown_halt_pct=Decimal("0.05"),
-            block_degraded_data=True,
-        ),
-        account=PaperTradingAccount(PaperAccountConfig(initial_cash=_paper_initial_cash())),
-        risk_policy=risk_policy
-        or RiskPolicy(
-            max_risk_per_trade_pct=Decimal("0.0025"),
-            max_daily_loss_pct=Decimal("0.01"),
-            max_weekly_loss_pct=Decimal("0.03"),
-            max_drawdown_pct=Decimal("0.05"),
-            max_spread_bps=Decimal("25"),
-            max_slippage_bps=Decimal("10"),
-            require_stop_loss=True,
-        ),
+        initial_cash=_paper_initial_cash(),
+        risk_policy=active_risk_policy,
     )
+    shadow_engines = _shadow_strategy_engines(
+        daily_confirmation=daily_confirmation,
+        risk_policy=active_risk_policy,
+    )
+    for snapshot in snapshots:
+        engine.on_market_update(snapshot)
+        for shadow_engine in shadow_engines.values():
+            shadow_engine.on_market_update(snapshot)
     controller = PaperDashboardController(
         engine=engine,
         api=PaperTradingAPI(engine),
@@ -1367,19 +1387,72 @@ def build_default_paper_dashboard_controller(
         order_book_snapshot=order_book,
         recent_market_trades=recent_market_trades,
         watchlist=watchlist,
-        events=[*source_events],
+        events=[*source_events, *_initial_events(engine)],
+        shadow_engines=shadow_engines,
     )
-    for snapshot in snapshots:
-        engine.on_market_update(snapshot)
-    controller.events.extend(_initial_events(engine))
-    if _restore_paper_account_state(controller):
-        latest = engine.cycles[-1] if engine.cycles else None
-        paper_mark_price = _paper_strategy_mark_price(watchlist, latest=latest)
-        controller.session_starting_equity = controller.api.status(
-            READ_CONTEXT,
-            mark_price=paper_mark_price,
-        ).portfolio.equity
+    _restore_paper_account_state(controller)
     return controller
+
+
+def _dashboard_risk_policy() -> RiskPolicy:
+    return RiskPolicy(
+        max_risk_per_trade_pct=Decimal("0.0025"),
+        max_daily_loss_pct=Decimal("0.01"),
+        max_weekly_loss_pct=Decimal("0.03"),
+        max_drawdown_pct=Decimal("0.05"),
+        max_spread_bps=Decimal("25"),
+        max_slippage_bps=Decimal("10"),
+        require_stop_loss=True,
+    )
+
+
+def _paper_engine_for_strategy(
+    *,
+    strategy: StrategyPlugin,
+    initial_cash: Decimal,
+    risk_policy: RiskPolicy,
+) -> PaperTradingEngine:
+    return PaperTradingEngine(
+        strategy=strategy,
+        config=PaperTradingConfig(
+            timeframe="1h",
+            order_quantity=Decimal("0.01"),
+            max_drawdown_halt_pct=Decimal("0.05"),
+            block_degraded_data=True,
+        ),
+        account=PaperTradingAccount(PaperAccountConfig(initial_cash=initial_cash)),
+        risk_policy=risk_policy,
+    )
+
+
+def _with_daily_confirmation(
+    strategy: StrategyPlugin,
+    daily_confirmation: DailyTrendConfirmation | None,
+) -> StrategyPlugin:
+    if daily_confirmation is None:
+        return strategy
+    return MultiTimeframePaperStrategy(strategy, daily_confirmation)
+
+
+def _shadow_strategy_engines(
+    *,
+    daily_confirmation: DailyTrendConfirmation | None,
+    risk_policy: RiskPolicy,
+) -> dict[str, PaperTradingEngine]:
+    strategies: tuple[StrategyPlugin, ...] = (
+        MinRiskSpotStrategyV1(),
+        TrendPullbackStrategy(),
+        BreakoutStrategy(),
+        SupportResistanceReboundStrategy(),
+    )
+    return {
+        strategy.config.name: _paper_engine_for_strategy(
+            strategy=_with_daily_confirmation(strategy, daily_confirmation),
+            initial_cash=_paper_initial_cash(),
+            risk_policy=risk_policy,
+        )
+        for strategy in strategies
+    }
 
 
 def dispatch_dashboard_action(
@@ -1404,6 +1477,13 @@ def dispatch_dashboard_action(
     elif action is DashboardAction.RESET_EMERGENCY_STOP:
         controller.reset_emergency_stop(reason=active_reason)
     return controller.state()
+
+
+def _apply_new_snapshot(engine: PaperTradingEngine, snapshot: PaperMarketSnapshot) -> None:
+    latest = engine.cycles[-1] if engine.cycles else None
+    if latest is not None and latest.snapshot.candle.closed_at >= snapshot.candle.closed_at:
+        return
+    engine.on_market_update(snapshot)
 
 
 def _initial_events(engine: PaperTradingEngine) -> list[PaperDashboardEvent]:
@@ -1597,7 +1677,7 @@ def _binance_snapshots_and_daily_confirmation() -> tuple[
     adapter = BinanceSpotMarketDataAdapter()
     order_book = adapter.order_book(PAIR)
     metrics = calculate_order_book_metrics(order_book)
-    hourly_candles = adapter.candles(PAIR, "1h", 4)
+    hourly_candles = adapter.candles(PAIR, "1h", 60)
     daily_confirmation = _daily_confirmation_from_candles(adapter.candles(PAIR, "1d", 4))
     recent_market_trades = _binance_recent_market_trades(adapter, hourly_candles)
     watchlist = _binance_watchlist(adapter)
@@ -2385,6 +2465,7 @@ def _runtime_telemetry(
     refresh: Mapping[str, JsonValue],
     requested_source: str,
     equity_history: tuple[Decimal, ...],
+    starting_balance: Decimal,
 ) -> dict[str, JsonValue]:
     return {
         "module_numbers": [
@@ -2418,8 +2499,16 @@ def _runtime_telemetry(
         "app_version": app_metadata.get("version", "not_available"),
         "app_version_source": app_metadata.get("version_source", "not_available"),
         "portfolio_sparkline": _portfolio_sparkline(equity_history),
-        "today_pnl": _today_pnl(cycles=cycles, status=status),
-        "today_pnl_pct": _today_pnl_pct(cycles=cycles, status=status),
+        "today_pnl": _today_pnl(
+            cycles=cycles,
+            status=status,
+            starting_balance=starting_balance,
+        ),
+        "today_pnl_pct": _today_pnl_pct(
+            cycles=cycles,
+            status=status,
+            starting_balance=starting_balance,
+        ),
         "today_pnl_source": "paper_cycle_equity",
         "next_check_at": refresh.get("next_check_at", "not_available"),
         "next_check_in_seconds": refresh.get("next_check_in_seconds", "not_available"),
@@ -2497,17 +2586,10 @@ def _today_pnl(
     cycles: tuple[PaperTradingCycleResult, ...],
     status: PaperStatusResponse,
     starting_balance: Decimal = Decimal("10000"),
-    session_baseline: Decimal | None = None,
 ) -> str:
     if not cycles:
         return "insufficient_data"
-    if session_baseline is not None:
-        return str(status.portfolio.equity - session_baseline)
-    latest = cycles[-1]
-    latest_day = latest.snapshot.received_at.date()
-    same_day = [cycle for cycle in cycles if cycle.snapshot.received_at.date() == latest_day]
-    baseline = same_day[0].equity if same_day else starting_balance
-    return str(status.portfolio.equity - baseline)
+    return str(status.portfolio.equity - starting_balance)
 
 
 def _today_pnl_pct(
@@ -2515,22 +2597,20 @@ def _today_pnl_pct(
     cycles: tuple[PaperTradingCycleResult, ...],
     status: PaperStatusResponse,
     starting_balance: Decimal = Decimal("10000"),
-    session_baseline: Decimal | None = None,
 ) -> str:
     if not cycles:
         return "insufficient_data"
-    if session_baseline is not None:
-        baseline = session_baseline
-        if baseline <= DECIMAL_ZERO:
-            return "insufficient_data"
-        return _pct((status.portfolio.equity - baseline) / baseline)
-    latest = cycles[-1]
-    latest_day = latest.snapshot.received_at.date()
-    same_day = [cycle for cycle in cycles if cycle.snapshot.received_at.date() == latest_day]
-    baseline = same_day[0].equity if same_day else starting_balance
-    if baseline <= DECIMAL_ZERO:
+    if starting_balance <= DECIMAL_ZERO:
         return "insufficient_data"
-    return _pct((status.portfolio.equity - baseline) / baseline)
+    return _pct((status.portfolio.equity - starting_balance) / starting_balance)
+
+
+def _paper_pnl_baseline(
+    *,
+    configured_initial_cash: Decimal,
+    equity_history: tuple[Decimal, ...],
+) -> Decimal:
+    return equity_history[0] if equity_history else configured_initial_cash
 
 
 def _portfolio_sparkline(equity_history: tuple[Decimal, ...]) -> list[JsonValue]:
@@ -2987,6 +3067,8 @@ def _adaptive_view_sections(
     order_book: OrderBookSnapshot | None,
     recent_market_trades: tuple[Trade, ...],
     strategy_lab_selection: Mapping[str, JsonValue],
+    shadow_engines: Mapping[str, PaperTradingEngine],
+    mark_price: Decimal,
 ) -> dict[str, JsonValue]:
     strategy = _as_mapping(payload["strategy"])
     portfolio = _as_mapping(payload["portfolio"])
@@ -3140,6 +3222,8 @@ def _adaptive_view_sections(
             transactions=transactions,
             actionable=actionable,
             evidence_status=evidence_status,
+            shadow_engines=shadow_engines,
+            mark_price=mark_price,
         ),
     }
 
@@ -3158,6 +3242,8 @@ def _strategy_lab_view(
     transactions: list[JsonValue],
     actionable: bool,
     evidence_status: str,
+    shadow_engines: Mapping[str, PaperTradingEngine],
+    mark_price: Decimal,
 ) -> dict[str, JsonValue]:
     selected_key = str(selection.get("strategy", "min_risk_spot_v1"))
     profile = _strategy_profile(selected_key)
@@ -3260,7 +3346,17 @@ def _strategy_lab_view(
             latest=latest,
             cycles=cycles,
             selected_parameter_profile=parameter_profile,
+            shadow_engines=shadow_engines,
+            mark_price=mark_price,
         ),
+        "shadow_test": {
+            "mode": "simultaneous_paper",
+            "duration_target": "2_months",
+            "account_count": str(len(shadow_engines)),
+            "isolation": "one paper account per strategy",
+            "baseline_strategy": "min_risk_spot_v1",
+            "live_execution_enabled": False,
+        },
         "limitations": _strategy_lab_limitations(run_mode, recommendation_actionable),
     }
 
@@ -3274,7 +3370,7 @@ def _strategy_profile(key: str) -> dict[str, JsonValue]:
 
 
 def _strategy_profiles() -> dict[str, dict[str, JsonValue]]:
-    return {
+    profiles: dict[str, dict[str, JsonValue]] = {
         "min_risk_spot_v1": {
             "key": "min_risk_spot_v1",
             "label": "MinRiskSpotStrategyV1",
@@ -3356,6 +3452,121 @@ def _strategy_profiles() -> dict[str, dict[str, JsonValue]]:
             },
         }
     }
+    swing_common: dict[str, JsonValue] = {
+        "family": "swing_spot",
+        "status": "shadow_paper_active",
+        "symbols": ["BTC/USDT"],
+        "timeframes": ["1h", "4h", "1d"],
+        "default_timeframe": "4h",
+        "parameter_profiles": ["default", "defensive"],
+        "paper_approval_allowed": False,
+        "enabled_modules": [
+            "strategy_profile_registry",
+            "shadow_paper_engine",
+            "risk_engine",
+            "market_data_adapter_read_only",
+            "indicators_feature_pipeline",
+            "strategy_explanation",
+            "paper_evaluation_gate",
+        ],
+        "required_evidence": [
+            "market_data",
+            "indicator_features",
+            "explanation_fields",
+            "paper_account_state",
+            "order_book_depth",
+            "recent_public_trades",
+            "backtest_metrics",
+        ],
+        "required_market_data": [
+            "BTC/USDT candles",
+            "20-candle support/resistance",
+            "order book spread",
+            "stream health",
+        ],
+        "required_indicators": [
+            "RSI",
+            "EMA 9",
+            "EMA 21",
+            "EMA 50",
+            "ATR percent",
+            "volume ratio",
+            "support/resistance",
+        ],
+        "required_ai_context_modules": [
+            "strategy_explanation",
+            "paper_evaluation_gate",
+        ],
+        "required_risk_checks": [
+            "stop loss required",
+            "max spread",
+            "max slippage",
+            "drawdown halt",
+            "cash reserve",
+        ],
+        "required_explanation_fields": [
+            "recommendation",
+            "ai_confidence",
+            "data_quality",
+            "indicator_reasons",
+        ],
+        "chart_overlays": [
+            "EMA 9",
+            "EMA 21",
+            "EMA 50",
+            "support",
+            "resistance",
+            "signal markers",
+        ],
+        "backtest_metrics": [
+            "net_pnl",
+            "max_drawdown",
+            "win_rate",
+            "expectancy",
+            "sharpe",
+            "sortino",
+            "profit_factor",
+            "fees",
+            "trade_count",
+        ],
+        "parameter_profile_configs": {
+            "default": {
+                "risk_per_trade_pct": "0.25",
+                "minimum_reward_to_risk": "2.0",
+                "entry_style": "balanced 1-2 month swing",
+            },
+            "defensive": {
+                "risk_per_trade_pct": "0.10",
+                "minimum_reward_to_risk": "2.5",
+                "entry_style": "strict confirmation only",
+            },
+        },
+    }
+    profiles.update(
+        {
+            "trend_pullback_v1": {
+                **swing_common,
+                "key": "trend_pullback_v1",
+                "label": "TrendPullbackStrategy",
+                "description": "Buy pullbacks inside a confirmed BTC uptrend; exit on trend break.",
+            },
+            "breakout_v1": {
+                **swing_common,
+                "key": "breakout_v1",
+                "label": "BreakoutStrategy",
+                "description": "Buy resistance breakouts only with volume confirmation.",
+            },
+            "support_resistance_rebound_v1": {
+                **swing_common,
+                "key": "support_resistance_rebound_v1",
+                "label": "SupportResistanceReboundStrategy",
+                "description": (
+                    "Buy near support in range markets; exit near resistance or support failure."
+                ),
+            },
+        }
+    )
+    return profiles
 
 
 def _strategy_selector_options() -> list[JsonValue]:
@@ -3542,42 +3753,95 @@ def _strategy_lab_compare_runs(
     latest: PaperTradingCycleResult | None,
     cycles: tuple[PaperTradingCycleResult, ...],
     selected_parameter_profile: str,
+    shadow_engines: Mapping[str, PaperTradingEngine],
+    mark_price: Decimal,
 ) -> list[JsonValue]:
-    backtest = _advanced_backtest_summary(status=status, latest=latest, cycles=cycles)
-    performance = _advanced_performance_summary(status, cycles=cycles)
-    return [
-        {
-            "run_id": "current_paper",
-            "strategy": profile["label"],
-            "parameter_profile": "default",
-            "mode": "paper",
-            "status": "current dashboard run",
-            "evidence_type": "paper_sample",
-            "completed_backtest": False,
-            "selected": selected_parameter_profile == "default",
-            "sample_size": backtest["sample_size"],
-            "win_rate": backtest["win_rate"],
-            "expectancy": backtest["expectancy"],
-            "max_drawdown": backtest["max_drawdown"],
-            "paper_pnl": performance["unrealized_pnl"],
-        },
-        {
-            "run_id": "defensive_profile",
-            "strategy": profile["label"],
-            "parameter_profile": "defensive",
-            "mode": "research",
-            "status": "not_run",
-            "evidence_type": "profile_config",
-            "completed_backtest": False,
-            "note": "profile_config_only",
-            "selected": selected_parameter_profile == "defensive",
-            "sample_size": "not_run",
-            "win_rate": "not_run",
-            "expectancy": "not_run",
-            "max_drawdown": "not_run",
-            "paper_pnl": "not_run",
-        },
+    del profile, status, latest, cycles
+    rows: list[dict[str, JsonValue]] = [
+        _shadow_strategy_row(
+            strategy_name=name,
+            engine=engine,
+            selected_parameter_profile=selected_parameter_profile,
+            mark_price=mark_price,
+        )
+        for name, engine in sorted(shadow_engines.items())
     ]
+    sorted_rows: list[dict[str, JsonValue]] = sorted(
+        rows,
+        key=_shadow_row_sort_key,
+        reverse=True,
+    )
+    json_rows: list[JsonValue] = []
+    json_rows.extend(sorted_rows)
+    return json_rows
+
+
+def _shadow_row_sort_key(row: dict[str, JsonValue]) -> Decimal:
+    return _decimal(str(row["risk_score"]))
+
+
+def _shadow_strategy_row(
+    *,
+    strategy_name: str,
+    engine: PaperTradingEngine,
+    selected_parameter_profile: str,
+    mark_price: Decimal,
+) -> dict[str, JsonValue]:
+    status = PaperTradingAPI(engine).status(READ_CONTEXT, mark_price=mark_price)
+    equity_curve = engine.account.state.equity_history
+    returns = returns_from_equity(equity_curve)
+    net_pnl = status.portfolio.equity - engine.account.config.initial_cash
+    win_rate = calculate_win_rate(returns)
+    max_drawdown = calculate_max_drawdown(equity_curve)
+    expectancy = calculate_expectancy(returns)
+    sharpe = calculate_sharpe_ratio(returns)
+    sortino = calculate_sortino_ratio(returns)
+    profit_factor = calculate_profit_factor(returns)
+    latest = engine.cycles[-1] if engine.cycles else None
+    latest_evaluation = latest.strategy_evaluation if latest is not None else None
+    profile_key = _strategy_key_for_name(strategy_name)
+    risk_score = net_pnl - (status.portfolio.equity * max_drawdown)
+    return {
+        "run_id": f"shadow_{profile_key}",
+        "strategy_key": profile_key,
+        "strategy": _strategy_profiles()[profile_key]["label"],
+        "parameter_profile": "default",
+        "mode": "shadow_paper",
+        "status": "running",
+        "evidence_type": "isolated_shadow_account",
+        "completed_backtest": False,
+        "selected": selected_parameter_profile == "default",
+        "sample_size": str(status.cycles_count),
+        "trade_count": str(status.trades_count),
+        "win_rate": str(win_rate),
+        "expectancy": str(expectancy),
+        "max_drawdown": str(max_drawdown),
+        "sharpe": str(sharpe),
+        "sortino": str(sortino),
+        "profit_factor": str(profit_factor),
+        "paper_pnl": str(net_pnl),
+        "current_equity": str(status.portfolio.equity),
+        "cash": str(status.portfolio.cash),
+        "open_btc": str(status.portfolio.base_quantity),
+        "fees": str(status.portfolio.fees_paid),
+        "latest_signal": latest_evaluation.signal.direction.value
+        if latest_evaluation is not None
+        else "not_available",
+        "latest_reason": latest_evaluation.reasons[0]
+        if latest_evaluation is not None
+        else "not_available",
+        "risk_score": str(risk_score),
+    }
+
+
+def _strategy_key_for_name(strategy_name: str) -> str:
+    mapping = {
+        "min_risk_spot_v1": "min_risk_spot_v1",
+        "trend_pullback_v1": "trend_pullback_v1",
+        "breakout_v1": "breakout_v1",
+        "support_resistance_rebound_v1": "support_resistance_rebound_v1",
+    }
+    return mapping.get(strategy_name, "min_risk_spot_v1")
 
 
 def _strategy_lab_limitations(
@@ -5120,15 +5384,15 @@ def _paper_dashboard_state_payload(controller: PaperDashboardController) -> dict
                 "parameter_profile": controller.strategy_lab_parameter_profile,
             },
         },
-        "account": {
-            "cash": str(state.cash),
-            "base_quantity": str(state.base_quantity),
-            "average_entry_price": str(state.average_entry_price),
-            "realized_pnl": str(state.realized_pnl),
-            "fees_paid": str(state.fees_paid),
-            "equity_history": [str(value) for value in state.equity_history],
-        },
+        "account": _paper_account_state_payload(state),
         "trades": [_paper_trade_as_dict(trade) for trade in controller.engine.account.trades],
+        "shadow_accounts": {
+            name: {
+                "account": _paper_account_state_payload(engine.account.state),
+                "trades": [_paper_trade_as_dict(trade) for trade in engine.account.trades],
+            }
+            for name, engine in sorted(controller.shadow_engines.items())
+        },
         "open_paper_orders": [order.as_dict() for order in controller.open_paper_orders],
         "alert_rules": [rule.as_dict() for rule in controller.alert_rules],
         "journal_entries": [entry.as_dict() for entry in controller.journal_entries],
@@ -5191,6 +5455,28 @@ def _restore_paper_payload(
         _paper_trade_from_mapping(item) for item in trades_payload if isinstance(item, Mapping)
     )
     controller.engine.account.restore_state(account_state, trades)
+    shadow_payload = payload.get("shadow_accounts", {})
+    if isinstance(shadow_payload, Mapping):
+        for strategy_name, item in shadow_payload.items():
+            if strategy_name not in controller.shadow_engines or not isinstance(item, Mapping):
+                continue
+            shadow_account_payload = item.get("account", {})
+            shadow_trades_payload = item.get("trades", [])
+            if not isinstance(shadow_account_payload, Mapping):
+                continue
+            shadow_trades = (
+                tuple(
+                    _paper_trade_from_mapping(trade)
+                    for trade in shadow_trades_payload
+                    if isinstance(trade, Mapping)
+                )
+                if isinstance(shadow_trades_payload, list)
+                else ()
+            )
+            controller.shadow_engines[strategy_name].account.restore_state(
+                _paper_account_state_from_mapping(shadow_account_payload),
+                shadow_trades,
+            )
     open_orders_payload = payload.get("open_paper_orders", [])
     if isinstance(open_orders_payload, list):
         controller.open_paper_orders = [
@@ -5343,6 +5629,17 @@ def _paper_account_state_from_mapping(payload: Mapping[str, JsonValue]) -> Paper
         fees_paid=_decimal(payload.get("fees_paid", "0")),
         equity_history=equity_history or (cash,),
     )
+
+
+def _paper_account_state_payload(state: PaperAccountState) -> dict[str, JsonValue]:
+    return {
+        "cash": str(state.cash),
+        "base_quantity": str(state.base_quantity),
+        "average_entry_price": str(state.average_entry_price),
+        "realized_pnl": str(state.realized_pnl),
+        "fees_paid": str(state.fees_paid),
+        "equity_history": [str(value) for value in state.equity_history],
+    }
 
 
 def _paper_trade_as_dict(trade: PaperTrade) -> dict[str, JsonValue]:

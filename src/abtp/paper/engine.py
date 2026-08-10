@@ -17,7 +17,16 @@ from abtp.data import (
     StreamHealth,
     normalize_timestamp,
 )
-from abtp.domain import Candle, OrderIntent, OrderSide, OrderStatus, OrderType
+from abtp.domain import (
+    Candle,
+    OrderIntent,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    RiskCheck,
+    RiskDecision,
+    RiskDecisionStatus,
+)
 from abtp.execution import ExecutionEngineConfig, ExecutionResult, PaperSafeExecutionEngine
 from abtp.features import FEATURE_SCHEMA_VERSION, FeatureSnapshot
 from abtp.paper.account import PaperAccountConfig, PaperTrade, PaperTradingAccount
@@ -249,12 +258,58 @@ class PaperTradingEngine:
     ) -> tuple[ExecutionResult | None, str | None]:
         if not evaluation.is_trade_signal:
             return None, None
+        order_side = (
+            OrderSide.BUY
+            if evaluation.signal.direction.value == OrderSide.BUY.value
+            else OrderSide.SELL
+        )
+        if order_side is OrderSide.SELL and self.account.state.base_quantity <= Decimal("0"):
+            return None, "no_position_to_sell"
         estimate = estimate_paper_fill(
             reference_price=snapshot.candle.close,
-            side=OrderSide.BUY,
+            side=order_side,
             config=self._config.fill_simulation,
         )
         proposed_order_id = uuid4()
+        if order_side is OrderSide.SELL:
+            quantity = min(self._config.order_quantity, self.account.state.base_quantity)
+            risk_decision = RiskDecision(
+                order_intent_id=proposed_order_id,
+                status=RiskDecisionStatus.APPROVED,
+                checks=(
+                    RiskCheck(
+                        name="paper_exit_reduces_exposure",
+                        passed=True,
+                        reason="paper sell exit reduces or closes simulated BTC exposure",
+                    ),
+                ),
+                evaluated_at=snapshot.received_at,
+                policy_version="paper-exit.v1",
+                rationale="Paper sell exit approved because it reduces simulated exposure.",
+                max_position_size=quantity,
+                stop_loss_required=False,
+            )
+            intent = OrderIntent(
+                id=proposed_order_id,
+                pair=snapshot.candle.pair,
+                side=order_side,
+                order_type=OrderType.MARKET,
+                quantity=quantity,
+                created_at=snapshot.received_at,
+                signal=evaluation.signal,
+                risk_decision=risk_decision,
+                status=OrderStatus.RISK_APPROVED,
+                client_order_ref=f"paper-{proposed_order_id}",
+            )
+            return (
+                self._execution_engine.submit(
+                    intent,
+                    idempotency_key=f"paper:{proposed_order_id}",
+                    submitted_at=snapshot.received_at,
+                    execution_price=snapshot.candle.close,
+                ),
+                "approved_exit",
+            )
         risk_decision = self._risk_engine.evaluate(
             RiskEvaluationRequest(
                 strategy_evaluation=evaluation,
@@ -275,7 +330,7 @@ class PaperTradingEngine:
         intent = OrderIntent(
             id=proposed_order_id,
             pair=snapshot.candle.pair,
-            side=OrderSide.BUY,
+            side=order_side,
             order_type=OrderType.MARKET,
             quantity=min(self._config.order_quantity, risk_decision.max_position_size),
             created_at=snapshot.received_at,
@@ -300,6 +355,14 @@ class PaperTradingEngine:
         previous = candles[-2] if len(candles) >= 2 else latest
         lookback = candles[-4] if len(candles) >= 4 else candles[0]
         sma_window = candles[-3:]
+        previous_window = candles[:-1][-20:] if len(candles) > 1 else candles
+        resistance_20 = max((candle.high for candle in previous_window), default=latest.high)
+        support_20 = min((candle.low for candle in previous_window), default=latest.low)
+        pullback_from_high_pct = (
+            (resistance_20 - latest.close) / resistance_20
+            if resistance_20 > Decimal("0") and latest.close < resistance_20
+            else Decimal("0")
+        )
         avg_volume = (
             sum((candle.volume for candle in candles[:-1]), Decimal("0"))
             / Decimal(len(candles[:-1]))
@@ -322,9 +385,15 @@ class PaperTradingEngine:
             if lookback.close
             else Decimal("0"),
             "market.volume_ratio": latest.volume / avg_volume if avg_volume else Decimal("1"),
+            "market.support_20": support_20,
+            "market.resistance_20": resistance_20,
+            "market.pullback_from_high_pct": pullback_from_high_pct,
             "indicator.sma.sma": sum((candle.close for candle in sma_window), Decimal("0"))
             / Decimal(len(sma_window)),
-            "indicator.rsi.rsi": Decimal("58") if latest.close >= lookback.close else Decimal("45"),
+            "indicator.ema_9": _ema(candles, period=9),
+            "indicator.ema_21": _ema(candles, period=21),
+            "indicator.ema_50": _ema(candles, period=50),
+            "indicator.rsi.rsi": _rsi(candles, period=14),
             "indicator.atr.atr_pct": (latest.high - latest.low) / latest.close,
             "data_quality.flag_count": Decimal(len(issues)),
             "liquidity.spread_bps": spread_bps,
@@ -386,3 +455,33 @@ def _trust_level(issues: tuple[DataQualityIssue, ...]) -> DataTrustLevel:
     if issues:
         return DataTrustLevel.DEGRADED
     return DataTrustLevel.TRUSTED
+
+
+def _ema(candles: tuple[Candle, ...], *, period: int) -> Decimal:
+    if not candles:
+        return Decimal("0")
+    closes = tuple(candle.close for candle in candles)
+    multiplier = Decimal("2") / Decimal(period + 1)
+    value = closes[0]
+    for close in closes[1:]:
+        value = close * multiplier + value * (Decimal("1") - multiplier)
+    return value
+
+
+def _rsi(candles: tuple[Candle, ...], *, period: int) -> Decimal:
+    if len(candles) < 2:
+        return Decimal("50")
+    if len(candles) < period + 1:
+        return Decimal("58") if candles[-1].close >= candles[0].close else Decimal("45")
+    closes = tuple(candle.close for candle in candles[-(period + 1) :])
+    changes = tuple(closes[index] - closes[index - 1] for index in range(1, len(closes)))
+    if not changes:
+        return Decimal("50")
+    gains = tuple(max(change, Decimal("0")) for change in changes)
+    losses = tuple(abs(min(change, Decimal("0"))) for change in changes)
+    average_gain = sum(gains, Decimal("0")) / Decimal(len(gains))
+    average_loss = sum(losses, Decimal("0")) / Decimal(len(losses))
+    if average_loss == Decimal("0"):
+        return Decimal("100")
+    relative_strength = average_gain / average_loss
+    return Decimal("100") - (Decimal("100") / (Decimal("1") + relative_strength))

@@ -6,7 +6,16 @@ from decimal import Decimal
 import pytest
 
 from abtp.data import OrderBookMetrics, StreamHealth
-from abtp.domain import Asset, AssetPair, Candle, Exchange, OrderSide, OrderStatus
+from abtp.domain import (
+    Asset,
+    AssetPair,
+    Candle,
+    Exchange,
+    OrderSide,
+    OrderStatus,
+    Signal,
+    SignalDirection,
+)
 from abtp.execution import ExecutionResult
 from abtp.paper import (
     PaperAccountConfig,
@@ -18,6 +27,12 @@ from abtp.paper import (
     estimate_paper_fill,
 )
 from abtp.strategies import MinRiskSpotStrategyV1
+from abtp.strategies.base import (
+    StrategyConfig,
+    StrategyContext,
+    StrategyEvaluation,
+    StrategySignalPlan,
+)
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 PAIR = AssetPair(Asset("BTC"), Asset("USDT"))
@@ -86,6 +101,22 @@ def test_direct_order_submission_is_blocked() -> None:
         engine.submit_order(object())
 
 
+def test_paper_engine_respects_sell_strategy_signal() -> None:
+    engine = PaperTradingEngine(
+        strategy=_SellAfterEntryStrategy(),
+        config=PaperTradingConfig(timeframe="1h", order_quantity=Decimal("0.01")),
+        account=PaperTradingAccount(PaperAccountConfig(initial_cash=Decimal("10000"))),
+    )
+
+    engine.on_market_update(_snapshot(0, "100"))
+    engine.on_market_update(_snapshot(1, "101"))
+
+    trades = engine.account.trades
+    assert [trade.side for trade in trades] == [OrderSide.BUY, OrderSide.SELL]
+    assert engine.cycles[-1].risk_decision_status == "approved_exit"
+    assert engine.account.state.base_quantity == Decimal("0.00")
+
+
 def test_paper_fill_estimate_includes_spread_slippage_and_latency() -> None:
     estimate = estimate_paper_fill(
         reference_price=Decimal("100"),
@@ -100,6 +131,45 @@ def test_paper_fill_estimate_includes_spread_slippage_and_latency() -> None:
 
     assert estimate.execution_price == Decimal("100.100")
     assert estimate.latency_ms == 42
+
+
+class _SellAfterEntryStrategy:
+    def __init__(self) -> None:
+        self._config = StrategyConfig(
+            name="sell_after_entry_fixture",
+            version="test",
+            supported_timeframes=("1h",),
+        )
+
+    @property
+    def config(self) -> StrategyConfig:
+        return self._config
+
+    def evaluate(self, context: StrategyContext) -> StrategyEvaluation:
+        exposure = context.features.values.get("portfolio.exposure_base", Decimal("0"))
+        direction = SignalDirection.SELL if exposure > Decimal("0") else SignalDirection.BUY
+        return StrategyEvaluation(
+            strategy_name=self.config.name,
+            strategy_version=self.config.version,
+            enabled=True,
+            signal=Signal(
+                source="sell_after_entry_fixture:test",
+                pair=context.features.pair,
+                generated_at=context.generated_at,
+                direction=direction,
+                confidence=Decimal("0.8"),
+                inputs_ref=context.feature_snapshot_ref,
+                rationale="fixture direction",
+            ),
+            plan=StrategySignalPlan(
+                entry_reason="fixture direction",
+                timeframe=context.timeframe,
+                feature_snapshot_ref=context.feature_snapshot_ref,
+                stop_suggestion=Decimal("99") if direction is SignalDirection.BUY else None,
+            ),
+            reasons=("fixture direction",),
+            generated_at=context.generated_at,
+        )
 
 
 def _snapshot(
