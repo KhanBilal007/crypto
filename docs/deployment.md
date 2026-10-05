@@ -13,6 +13,7 @@ ABTP_PROFILE=paper
 ABTP_TRADING_MODE=paper
 ABTP_ENABLE_LIVE_TRADING=false
 ABTP_ENABLE_PAPER_TRADING=true
+ABTP_MARKET_DATA_SOURCE=binance
 ```
 
 Live mode, if reviewed in a later stage, requires separate environment
@@ -33,6 +34,26 @@ plaintext secrets in files, logs, metrics, audit rows, or database records.
 9. Record operator acknowledgement that profit is not guaranteed and only risk
    capital may be used.
 
+## Dashboard Access Boundary
+
+The dashboard server now refuses non-loopback binding. Keep it on
+`127.0.0.1` behind a separately configured HTTPS reverse proxy for remote use;
+an existing deployment using `--host 0.0.0.0` must be adjusted before rollout.
+Do not expose its HTTP port directly. Configure all of:
+
+- `ABTP_DASHBOARD_USERNAME`
+- `ABTP_DASHBOARD_PASSWORD` (at least 20 characters; inject securely, never commit)
+- `ABTP_DASHBOARD_PUBLIC_ORIGIN` (exact HTTPS origin, with no trailing slash/path)
+
+The browser receives an HTTP Basic authentication challenge. The proxy must
+preserve the public Host and Authorization headers, terminate trusted HTTPS,
+and restrict direct access to the upstream. The application verifies Host,
+authentication, JSON content type, request size, and cross-origin controls.
+Local loopback-only use remains available without credentials. These checks
+do not replace TLS, firewall rules, login rate limiting, or server hardening.
+No production proxy or certificate configuration has been changed or verified;
+the deployed IP's certificate still failed trusted validation on October 5.
+
 ## Database
 
 The repository supports local SQLite migrations through `abtp.db`. A release
@@ -41,6 +62,16 @@ decision trails from append-only audit records. Backups may use SQLite file
 copies or dumps while the process is stopped.
 
 ## Smoke Checks
+
+Normal dashboard operation uses real Binance spot market data. Demo input is
+only for explicitly selected offline tests. A Binance startup failure must not
+silently substitute sample candles. The server loop polls every 15 seconds even
+with no browser open; strategies evaluate closed hourly candles. Run one server
+process per paper ledger and supervise it for restart after failures.
+
+Before updating a running trial, follow the backup and validation steps in
+[the September 10 audit](profitability_audit_2026_09_10.md). Existing balances are
+preserved; cumulative wallet metrics may include earlier strategy versions.
 
 Deployment smoke is satisfied when:
 

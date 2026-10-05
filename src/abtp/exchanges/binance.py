@@ -151,6 +151,16 @@ class BinanceSpotMarketDataAdapter:
         )
         return tuple(_agg_trade_to_trade(pair, item) for item in payload[-20:])
 
+    def recent_trades(self, pair: AssetPair) -> tuple[Trade, ...]:
+        """Return the latest aggregate trades, not the start of a historical window."""
+
+        self._require_symbol(pair)
+        payload = self._get_json_array(
+            "/api/v3/aggTrades",
+            {"symbol": _binance_symbol(pair), "limit": "20"},
+        )
+        return tuple(_agg_trade_to_trade(pair, item) for item in payload[-20:])
+
     def submit_order(self, _intent: OrderIntent) -> ExchangeOrder:
         raise UnsupportedOperationError("Binance adapter is market-data-only in paper dashboard")
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pytest
+
 from abtp.ai import MarketRegimeClassifier
 from abtp.data import DataQualityStatus, DataTrustLevel
 from abtp.domain import Asset, AssetPair, SignalDirection
@@ -62,6 +64,43 @@ def test_support_rebound_strategy_buys_near_support() -> None:
     assert "support rebound" in evaluation.reasons[0]
 
 
+@pytest.mark.parametrize(
+    "strategy", [TrendPullbackStrategy(), BreakoutStrategy(), SupportResistanceReboundStrategy()]
+)
+def test_downtrend_and_low_volume_cannot_suppress_exit(strategy: object) -> None:
+    context = _context(
+        close=Decimal("90"),
+        exposure=Decimal("0.01"),
+        volume_ratio=Decimal("0.1"),
+        return_3=Decimal("-0.05"),
+        rsi=Decimal("30"),
+    )
+    evaluation = strategy.evaluate(context)  # type: ignore[attr-defined]
+    assert evaluation.signal.direction is SignalDirection.SELL
+
+
+@pytest.mark.parametrize(
+    "strategy", [TrendPullbackStrategy(), BreakoutStrategy(), SupportResistanceReboundStrategy()]
+)
+def test_existing_position_is_not_repeatedly_bought(strategy: object) -> None:
+    context = _context(
+        close=Decimal("103"),
+        exposure=Decimal("0.01"),
+        support=Decimal("102"),
+        resistance=Decimal("120"),
+        ema_21=Decimal("100"),
+    )
+    assert strategy.evaluate(context).signal.direction is SignalDirection.HOLD  # type: ignore[attr-defined]
+
+
+def test_support_buy_rejects_falling_price_and_narrow_reward() -> None:
+    strategy = SupportResistanceReboundStrategy()
+    falling = _context(close=Decimal("99"), support=Decimal("100"))
+    narrow = _context(close=Decimal("101"), support=Decimal("100"), resistance=Decimal("104"))
+    assert strategy.evaluate(falling).signal.direction is SignalDirection.HOLD
+    assert strategy.evaluate(narrow).signal.direction is SignalDirection.HOLD
+
+
 def _context(
     *,
     close: Decimal,
@@ -73,6 +112,8 @@ def _context(
     pullback: Decimal = Decimal("0.02"),
     rsi: Decimal = Decimal("50"),
     volume_ratio: Decimal = Decimal("1.2"),
+    exposure: Decimal = Decimal("0"),
+    return_3: Decimal = Decimal("0.02"),
 ) -> StrategyContext:
     snapshot = FeatureSnapshot(
         pair=PAIR,
@@ -81,7 +122,8 @@ def _context(
         values={
             "market.close": close,
             "market.return_1": Decimal("0.01"),
-            "market.return_3": Decimal("0.02"),
+            "market.return_3": return_3,
+            "portfolio.exposure_base": exposure,
             "market.volume_ratio": volume_ratio,
             "market.support_20": support,
             "market.resistance_20": resistance,

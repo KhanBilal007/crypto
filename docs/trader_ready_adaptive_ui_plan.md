@@ -498,6 +498,94 @@ notification read state, and activity view-all routing. The UI still renders
 
 ## Acceptance Criteria
 
+### September 10 Runtime And Strategy Audit
+
+- Implemented local corrections for unattended Binance polling, closed-candle
+  catch-up, fresh daily confirmation, indicator warmup without historical fills,
+  persisted protective exits, adverse SELL costs, and fee-inclusive trade metrics.
+- Normal operation defaults to Binance. No automatic demo fallback is allowed;
+  synthetic observations are restricted to explicitly selected automated tests.
+- Added a reproducible 90-day historical Binance evaluation and a separate
+  current-data paper check. Strategy revisions reduced losses in that evaluation
+  but have not established large or dependable profits.
+- Server installation, authentication/certificate review, and a sustained forward
+  trial remain pending. Existing run history must be preserved.
+- Evidence and remaining rollout work:
+  [September 10 audit](profitability_audit_2026_09_10.md).
+- September 14 verification: 631 tests, lint, formatting, and type checks pass.
+  Browser checks confirmed current Binance data, all four comparison accounts,
+  measured latency, and corrected model/performance labels. Changes remain
+  local; the deployed server still needs the rollout above.
+
+### September 15 Live Readiness Review
+
+Decision: **NO-GO for real-money trading**. Full review and evidence:
+[live readiness review](live_readiness_review_2026_09_15.md).
+
+- [ ] Build and qualify an authenticated Binance order/account connector;
+  the current Binance adapter remains read-only.
+- [ ] Implement the complete live SELL/close/protective-order lifecycle.
+- [x] Enforce durable order deduplication and single-use approval tokens in the
+  local gateway contract (October 5); exchange-side identity/recovery is pending.
+- [x] Enforce market/account/risk freshness and approval start/expiry bounds in
+  the local gateway contract (October 5); authenticated input collection is pending.
+- [x] Correct promotion-gate entry fees and partial-exit trade counting (October 5).
+- [ ] Integrate reconciliation, loss limits, and emergency controls with every
+  connected submission path; test ambiguous timeouts and restart recovery.
+- [ ] Verify server authentication, trusted TLS, least-privilege key restrictions,
+  backup restoration, process supervision, and notifications.
+- [ ] Deploy the corrected paper release and complete dated forward evidence;
+  qualify exchange behavior with virtual funds before any live proposal.
+
+Verification: 631 existing tests, lint, formatting, and typing pass. Additional
+offline probes nevertheless reproduce four safety/metrics gaps documented in
+the review. No real trading was enabled; this update adds review findings only.
+
+September 30 recheck: NO-GO unchanged. The deployed service still reports
+`live_capital_ready=false`; trusted TLS remains unresolved. All 631 existing
+tests pass again, but fresh offline probes reproduce the same four defects.
+At that recheck the checklist was still pending; evidence is appended to the
+[live readiness review](live_readiness_review_2026_09_15.md).
+
+### October 5 Local Safety Fixes
+
+- Implemented a durable SQLite submission ledger, concurrency/restart duplicate
+  protection, and a fail-closed block after ambiguous exchange outcomes.
+- Added independent account timestamps, bounded data/risk/intent ages, an
+  internal gateway clock, and a second validation immediately before submission.
+- Enforced approval start time, exclusive expiry, and maximum policy lifetime.
+- Reused fee-inclusive completed-position accounting in the promotion gate;
+  invalid or unmatched fills cannot yield promotion eligibility.
+- Verification: **689 tests passed**, including 58 added regression cases;
+  lint, formatting, and type checks passed. Tests used isolated fake adapters
+  and temporary ledgers, not exchange accounts or the user's paper history.
+- These are local, uncommitted changes. No push, deployment, credentials,
+  testnet order, or real-money action occurred. Runtime live support stays false.
+- Decision remains **NO-GO**: authenticated connector/testnet qualification,
+  live exits/protection, integrated reconciliation/halts, secure deployment,
+  reviewed rollout, and corrected forward evidence remain pending.
+
+### October 5 Testnet And HTTP Follow-Up
+
+- Added a fixed-host, signed Binance Spot Testnet client and no-matched-order
+  qualification command. Production execution stays disabled and disconnected.
+- Authenticated account, order-query, and `order/test` checks passed against
+  Binance Spot Testnet at 12:57 UTC. Zero matched trades were created. See
+  [the qualification report](testnet_qualification_2026_10_05.md).
+- Added offline tests for virtual order request construction, protective OCO
+  requests, partial statuses, commission assets, clock correction, and read-only
+  reconciliation. These are not completed exchange lifecycle qualification.
+- Added persistent gateway halt checks and HTTP authentication/origin/size/Host
+  checks, with loopback-only binding. Remote deployment requires a trusted HTTPS
+  proxy and credentials; see [deployment guidance](deployment.md).
+- Full test suite before final publication: 732 passed. Real-money readiness
+  remains NO-GO. Matched testnet lifecycle tests, integrated production controls,
+  secured deployment, and corrected forward performance evidence remain open.
+- Credential files and the user's local portfolio state are excluded from the
+  publication. No deployment or real-money action is part of the Git push.
+
+### Original Acceptance Criteria
+
 - A beginner can use the dashboard without understanding trading jargon.
 - An advanced trader can audit why the bot made a decision.
 - A strategy researcher can switch strategies and see relevant evidence only.

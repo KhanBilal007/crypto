@@ -12,6 +12,8 @@ from enum import StrEnum
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from sqlite3 import Connection
+from threading import RLock
+from time import monotonic
 from uuid import UUID, uuid4
 
 from abtp.api import (
@@ -22,12 +24,9 @@ from abtp.api import (
     PaperTradingAPI,
 )
 from abtp.backtesting.metrics import (
-    calculate_expectancy,
     calculate_max_drawdown,
-    calculate_profit_factor,
     calculate_sharpe_ratio,
     calculate_sortino_ratio,
-    calculate_win_rate,
     returns_from_equity,
 )
 from abtp.data import OrderBookMetrics, StreamHealth, calculate_order_book_metrics
@@ -59,6 +58,7 @@ from abtp.paper import (
     PaperTradingEngine,
 )
 from abtp.paper.engine import PaperMarketSnapshot, PaperTradingCycleResult
+from abtp.paper.trade_metrics import trade_metrics
 from abtp.repositories import PaperDashboardRepository
 from abtp.risk import RiskPolicy
 from abtp.strategies import (
@@ -441,6 +441,9 @@ class MultiTimeframePaperStrategy:
     def config(self) -> StrategyConfig:
         return self._base_strategy.config
 
+    def update_daily_confirmation(self, confirmation: DailyTrendConfirmation) -> None:
+        self._daily_confirmation = confirmation
+
     def evaluate(self, context: StrategyContext) -> StrategyEvaluation:
         evaluation = self._base_strategy.evaluate(context)
         if evaluation.signal.direction is not SignalDirection.BUY:
@@ -459,8 +462,8 @@ class PaperDashboardController:
     report_path: str = "docs/paper_trading_status_report.md"
     state_path: str | None = None
     db_path: str | None = None
-    market_data_source: str = "demo"
-    requested_market_data_source: str = "demo"
+    market_data_source: str = "binance spot"
+    requested_market_data_source: str = "binance"
     selected_watchlist_symbol: str = "BTC/USDT"
     watchlist: tuple[DashboardWatchlistItem, ...] = ()
     ui_mode: DashboardUIMode = DashboardUIMode.ADVANCED_TRADER
@@ -482,12 +485,18 @@ class PaperDashboardController:
     market_refresh_interval_seconds: int = 15
     last_market_refresh_at: datetime | None = None
     shadow_engines: dict[str, PaperTradingEngine] = field(default_factory=dict)
+    lock: RLock = field(default_factory=RLock, repr=False)
+    last_market_error: str | None = None
+    last_market_success_at: datetime | None = None
+    last_market_latency_ms: int | None = None
+    missed_execution_candles: int = 0
 
     def state(self, *, ui_mode: DashboardUIMode | str | None = None) -> dict[str, JsonValue]:
         """Return a browser-safe dashboard state payload."""
 
         active_ui_mode = _ui_mode(ui_mode or self.ui_mode)
-        self.refresh_market_data_if_due()
+        with self.lock:
+            self.refresh_market_data_if_due()
         latest = self.engine.cycles[-1] if self.engine.cycles else None
         active_watchlist_item = _selected_watchlist_item(
             self.watchlist,
@@ -530,6 +539,24 @@ class PaperDashboardController:
             interval_seconds=self.market_refresh_interval_seconds,
             server_time=server_time,
         )
+        refresh["last_success_at"] = _str(self.last_market_success_at)
+        refresh["latency_ms"] = (
+            str(self.last_market_latency_ms)
+            if self.last_market_latency_ms is not None
+            else "not_available"
+        )
+        refresh["error"] = self.last_market_error
+        refresh["last_processed_candle"] = _str(self.engine.last_processed_at)
+        refresh["missed_execution_candles"] = self.missed_execution_candles
+        refresh["strategy_data_status"] = (
+            "stale"
+            if self.last_market_error
+            or self.engine.last_processed_at is None
+            or server_time - self.engine.last_processed_at > timedelta(hours=1, minutes=2)
+            else "current"
+        )
+        if self.requested_market_data_source != "binance":
+            refresh["strategy_data_status"] = "demo"
         app_metadata = _app_metadata(server_time)
         payload: dict[str, JsonValue] = {
             "mode": "PAPER MODE",
@@ -569,6 +596,9 @@ class PaperDashboardController:
                 ),
                 "spread": _str(_latest_spread(latest)),
                 "data_freshness": active_watchlist_item.data_health,
+                "strategy_data_status": refresh["strategy_data_status"],
+                "last_strategy_candle": _str(self.engine.last_processed_at),
+                "strategy_data_error": self.last_market_error,
                 "exchange_connection": _exchange_connection_status(
                     requested_source=self.requested_market_data_source,
                     market_item=active_watchlist_item,
@@ -579,7 +609,9 @@ class PaperDashboardController:
                     market_item=active_watchlist_item,
                     latest=latest,
                 ),
-                "latency_ms": _latency_ms(latest),
+                "latency_ms": refresh["latency_ms"]
+                if self.requested_market_data_source == "binance"
+                else _latency_ms(latest),
                 "trend_strength_pct": _trend_strength_pct(latest),
                 "trend_strength_source": _trend_strength_source(latest),
                 "market_regime": status.active_regime,
@@ -656,6 +688,7 @@ class PaperDashboardController:
             ),
             "logs": list(event.as_dict() for event in self.events),
             "transactions": _transaction_state(self.api.trades(READ_CONTEXT)),
+            "trade_metrics": _account_trade_metrics(self.engine),
             "daily_report": {
                 "label": "Daily paper-trading report",
                 "path": self.report_path,
@@ -706,36 +739,72 @@ class PaperDashboardController:
         ):
             return
         self.last_market_refresh_at = checked_at
-        adapter = BinanceSpotMarketDataAdapter(BinanceSpotMarketDataConfig(timeout_seconds=1.0))
+        started = monotonic()
+        adapter = BinanceSpotMarketDataAdapter(BinanceSpotMarketDataConfig(timeout_seconds=5.0))
         self.watchlist = _refresh_binance_watchlist(adapter, self.watchlist, checked_at=checked_at)
         try:
             self.order_book_snapshot = adapter.order_book(PAIR)
-        except (AttributeError, ExchangeAdapterError, OSError, ValueError):
+        except (AttributeError, ExchangeAdapterError, OSError, ValueError) as exc:
+            self.last_market_error = f"order book refresh failed: {type(exc).__name__}"
             return
         try:
-            candles = adapter.candles(PAIR, "1h", 1)
-        except (AttributeError, ExchangeAdapterError, OSError, ValueError):
+            last = self.engine.last_processed_at
+            missing = int((checked_at - last).total_seconds() // 3600) + 2 if last else 60
+            candles = adapter.candles(PAIR, "1h", min(998, max(2, missing)))
+            daily_candles = adapter.candles(PAIR, "1d", min(45, max(4, missing // 24 + 5)))
+        except (AttributeError, ExchangeAdapterError, OSError, ValueError) as exc:
+            self.last_market_error = f"candle refresh failed: {type(exc).__name__}"
             return
         if not candles:
+            self.last_market_error = "no closed candles returned"
             return
+        self.last_market_success_at = checked_at
+        self.last_market_error = None
         metrics = calculate_order_book_metrics(self.order_book_snapshot)
-        snapshot = PaperMarketSnapshot(
-            candle=candles[-1],
-            order_book_metrics=metrics,
-            health=StreamHealth(
-                is_connected=True,
-                is_stale=False,
-                is_degraded=False,
-                disconnect_count=0,
-                last_message_at=checked_at,
-                latency_ms=10,
-                stale_after=timedelta(seconds=30),
-            ),
-            received_at=max(candles[-1].closed_at, checked_at),
-        )
-        _apply_new_snapshot(self.engine, snapshot)
-        for shadow_engine in self.shadow_engines.values():
-            _apply_new_snapshot(shadow_engine, snapshot)
+        try:
+            self.recent_market_trades = adapter.recent_trades(PAIR)
+        except (AttributeError, ExchangeAdapterError, OSError, ValueError):
+            self.recent_market_trades = ()
+        self.last_market_latency_ms = int((monotonic() - started) * 1000)
+        engines = (self.engine, *self.shadow_engines.values())
+        for candle in candles:
+            if candle.closed_at > checked_at:
+                continue
+            if (
+                self.engine.last_processed_at is not None
+                and candle.closed_at <= self.engine.last_processed_at
+            ):
+                continue
+            confirmation = _daily_confirmation_from_candles(
+                tuple(item for item in daily_candles if item.closed_at <= candle.closed_at)
+            )
+            timely = checked_at - candle.closed_at <= timedelta(minutes=2)
+            if not timely:
+                self.missed_execution_candles += 1
+            snapshot = PaperMarketSnapshot(
+                candle=candle,
+                order_book_metrics=metrics,
+                health=StreamHealth(
+                    is_connected=True,
+                    is_stale=False,
+                    is_degraded=False,
+                    disconnect_count=0,
+                    last_message_at=checked_at,
+                    latency_ms=int((monotonic() - started) * 1000),
+                    stale_after=timedelta(seconds=30),
+                ),
+                received_at=checked_at,
+            )
+            control = self.api.control_state
+            for engine in engines:
+                if isinstance(engine.strategy, MultiTimeframePaperStrategy):
+                    engine.strategy.update_daily_confirmation(confirmation)
+                _apply_new_snapshot(
+                    engine,
+                    snapshot,
+                    execute=timely and not control.paused and not control.kill_switch_active,
+                )
+        self.market_data_source = "binance spot"
         _save_paper_account_state(self)
 
     def set_ui_mode(self, mode: DashboardUIMode | str) -> dict[str, JsonValue]:
@@ -1350,9 +1419,11 @@ def build_default_paper_dashboard_controller(
     source_name = (
         market_data_source
         if market_data_source is not None
-        else os.getenv("ABTP_MARKET_DATA_SOURCE", "demo")
+        else os.getenv("ABTP_MARKET_DATA_SOURCE", "binance")
     )
     requested_market_source = source_name.strip().lower()
+    if requested_market_source not in {"binance", "demo"}:
+        raise ValueError("market data source must be binance (normal use) or demo (tests)")
     (
         snapshots,
         active_market_source,
@@ -1363,20 +1434,24 @@ def build_default_paper_dashboard_controller(
         watchlist,
     ) = _dashboard_inputs(requested_market_source)
     active_risk_policy = risk_policy or _dashboard_risk_policy()
+    if requested_market_source == "binance" and daily_confirmation is None:
+        daily_confirmation = _daily_confirmation_from_candles(())
     strategy: StrategyPlugin = _with_daily_confirmation(MinRiskSpotStrategyV1(), daily_confirmation)
     engine = _paper_engine_for_strategy(
         strategy=strategy,
         initial_cash=_paper_initial_cash(),
         risk_policy=active_risk_policy,
+        require_warmup=requested_market_source == "binance",
     )
     shadow_engines = _shadow_strategy_engines(
         daily_confirmation=daily_confirmation,
         risk_policy=active_risk_policy,
+        require_warmup=requested_market_source == "binance",
     )
     for snapshot in snapshots:
-        engine.on_market_update(snapshot)
+        engine.on_market_update(snapshot, execute=requested_market_source != "binance")
         for shadow_engine in shadow_engines.values():
-            shadow_engine.on_market_update(snapshot)
+            shadow_engine.on_market_update(snapshot, execute=requested_market_source != "binance")
     controller = PaperDashboardController(
         engine=engine,
         api=PaperTradingAPI(engine),
@@ -1411,6 +1486,7 @@ def _paper_engine_for_strategy(
     strategy: StrategyPlugin,
     initial_cash: Decimal,
     risk_policy: RiskPolicy,
+    require_warmup: bool = False,
 ) -> PaperTradingEngine:
     return PaperTradingEngine(
         strategy=strategy,
@@ -1419,6 +1495,8 @@ def _paper_engine_for_strategy(
             order_quantity=Decimal("0.01"),
             max_drawdown_halt_pct=Decimal("0.05"),
             block_degraded_data=True,
+            minimum_history=50 if require_warmup else 1,
+            allow_pyramiding=not require_warmup,
         ),
         account=PaperTradingAccount(PaperAccountConfig(initial_cash=initial_cash)),
         risk_policy=risk_policy,
@@ -1438,6 +1516,7 @@ def _shadow_strategy_engines(
     *,
     daily_confirmation: DailyTrendConfirmation | None,
     risk_policy: RiskPolicy,
+    require_warmup: bool = False,
 ) -> dict[str, PaperTradingEngine]:
     strategies: tuple[StrategyPlugin, ...] = (
         MinRiskSpotStrategyV1(),
@@ -1450,6 +1529,7 @@ def _shadow_strategy_engines(
             strategy=_with_daily_confirmation(strategy, daily_confirmation),
             initial_cash=_paper_initial_cash(),
             risk_policy=risk_policy,
+            require_warmup=require_warmup,
         )
         for strategy in strategies
     }
@@ -1479,11 +1559,16 @@ def dispatch_dashboard_action(
     return controller.state()
 
 
-def _apply_new_snapshot(engine: PaperTradingEngine, snapshot: PaperMarketSnapshot) -> None:
+def _apply_new_snapshot(
+    engine: PaperTradingEngine,
+    snapshot: PaperMarketSnapshot,
+    *,
+    execute: bool = True,
+) -> None:
     latest = engine.cycles[-1] if engine.cycles else None
     if latest is not None and latest.snapshot.candle.closed_at >= snapshot.candle.closed_at:
         return
-    engine.on_market_update(snapshot)
+    engine.on_market_update(snapshot, execute=execute)
 
 
 def _initial_events(engine: PaperTradingEngine) -> list[PaperDashboardEvent]:
@@ -1554,24 +1639,7 @@ def _dashboard_inputs(
                 watchlist,
             )
         except (ExchangeAdapterError, OSError, ValueError) as exc:
-            snapshots = _demo_snapshots()
-            order_book = _demo_order_book(snapshots[-1].candle.close)
-            return (
-                snapshots,
-                "demo fallback",
-                (
-                    PaperDashboardEvent(
-                        event_type="market_data_source_fallback",
-                        message="Demo market data loaded because Binance was unavailable.",
-                        reason=str(exc),
-                        occurred_at=datetime.now(UTC),
-                    ),
-                ),
-                None,
-                order_book,
-                _demo_market_trades(snapshots),
-                _demo_watchlist(),
-            )
+            raise ValueError("Binance market data unavailable; demo fallback is disabled") from exc
     snapshots = _demo_snapshots()
     order_book = _demo_order_book(snapshots[-1].candle.close)
     return (
@@ -1679,7 +1747,7 @@ def _binance_snapshots_and_daily_confirmation() -> tuple[
     metrics = calculate_order_book_metrics(order_book)
     hourly_candles = adapter.candles(PAIR, "1h", 60)
     daily_confirmation = _daily_confirmation_from_candles(adapter.candles(PAIR, "1d", 4))
-    recent_market_trades = _binance_recent_market_trades(adapter, hourly_candles)
+    recent_market_trades = _binance_recent_market_trades(adapter)
     watchlist = _binance_watchlist(adapter)
     snapshots = []
     for index, candle in enumerate(hourly_candles):
@@ -1698,24 +1766,11 @@ def _binance_snapshots_and_daily_confirmation() -> tuple[
 
 def _binance_recent_market_trades(
     adapter: BinanceSpotMarketDataAdapter,
-    hourly_candles: tuple[Candle, ...],
 ) -> tuple[Trade, ...]:
-    trade_end = hourly_candles[-1].closed_at
     try:
-        return adapter.trades(PAIR, trade_end - timedelta(hours=1), trade_end)
+        return adapter.recent_trades(PAIR)
     except (AttributeError, ExchangeAdapterError, OSError, ValueError):
-        return _demo_market_trades(
-            tuple(
-                _snapshot(
-                    index,
-                    candle.close,
-                    exchange_name=candle.exchange.name,
-                    candle=candle,
-                    received_at=candle.closed_at + timedelta(milliseconds=1),
-                )
-                for index, candle in enumerate(hourly_candles)
-            )
-        )
+        return ()
 
 
 def _binance_watchlist(
@@ -1742,13 +1797,13 @@ def _binance_watchlist(
             items.append(
                 DashboardWatchlistItem(
                     symbol=pair.symbol,
-                    price=WATCHLIST_DEMO_PRICES[pair.symbol],
-                    source="demo fallback",
+                    price=None,
+                    source="binance spot",
                     updated_at=datetime.now(UTC),
                     data_health="degraded",
                     paper_tradable=pair.symbol == PAIR.symbol,
                     note=f"{_watchlist_note(pair.symbol)} Binance ticker unavailable.",
-                    price_change_24h_pct=_demo_price_change_24h_pct(pair.symbol),
+                    price_change_24h_pct=None,
                 )
             )
     return tuple(items)
@@ -1784,13 +1839,13 @@ def _refresh_binance_watchlist(
                 refreshed.append(
                     DashboardWatchlistItem(
                         symbol=pair.symbol,
-                        price=WATCHLIST_DEMO_PRICES[pair.symbol],
-                        source="demo fallback",
+                        price=None,
+                        source="binance spot",
                         updated_at=checked_at,
                         data_health="degraded",
                         paper_tradable=pair.symbol == PAIR.symbol,
                         note=f"{_watchlist_note(pair.symbol)} Binance ticker refresh failed.",
-                        price_change_24h_pct=_demo_price_change_24h_pct(pair.symbol),
+                        price_change_24h_pct=None,
                     )
                 )
                 continue
@@ -1821,6 +1876,7 @@ def _binance_price_change_24h_pct(
 
 
 def _daily_confirmation_from_candles(candles: tuple[Candle, ...]) -> DailyTrendConfirmation:
+    candles = candles[-4:]
     if len(candles) < 4:
         return DailyTrendConfirmation(
             allow_buy=False,
@@ -2495,7 +2551,9 @@ def _runtime_telemetry(
         ),
         "notification_count": notifications.get("count", 0),
         "bell_state": notifications.get("bell_state", "clear"),
-        "latency_ms": _latency_ms(latest),
+        "latency_ms": refresh.get("latency_ms", "not_available")
+        if requested_source == "binance"
+        else _latency_ms(latest),
         "app_version": app_metadata.get("version", "not_available"),
         "app_version_source": app_metadata.get("version_source", "not_available"),
         "portfolio_sparkline": _portfolio_sparkline(equity_history),
@@ -3194,6 +3252,7 @@ def _adaptive_view_sections(
                 status=status,
                 latest=latest,
                 cycles=cycles,
+                closed_metrics=_as_mapping(payload["trade_metrics"]),
             ),
             "performance": _advanced_performance_summary(status=status, cycles=cycles),
             "exit_review": _advanced_exit_review(
@@ -3756,7 +3815,7 @@ def _strategy_lab_compare_runs(
     shadow_engines: Mapping[str, PaperTradingEngine],
     mark_price: Decimal,
 ) -> list[JsonValue]:
-    del profile, status, latest, cycles
+    del latest, cycles
     rows: list[dict[str, JsonValue]] = [
         _shadow_strategy_row(
             strategy_name=name,
@@ -3766,6 +3825,13 @@ def _strategy_lab_compare_runs(
         )
         for name, engine in sorted(shadow_engines.items())
     ]
+    for row in rows:
+        row["selected"] = (
+            row["strategy_key"] == profile["key"] and selected_parameter_profile == "default"
+        )
+    if status.paused or status.kill_switch_active:
+        for row in rows:
+            row["status"] = "emergency_stop" if status.kill_switch_active else "paused"
     sorted_rows: list[dict[str, JsonValue]] = sorted(
         rows,
         key=_shadow_row_sort_key,
@@ -3790,13 +3856,15 @@ def _shadow_strategy_row(
     status = PaperTradingAPI(engine).status(READ_CONTEXT, mark_price=mark_price)
     equity_curve = engine.account.state.equity_history
     returns = returns_from_equity(equity_curve)
-    net_pnl = status.portfolio.equity - engine.account.config.initial_cash
-    win_rate = calculate_win_rate(returns)
+    baseline = _paper_pnl_baseline(
+        configured_initial_cash=engine.account.config.initial_cash,
+        equity_history=equity_curve,
+    )
+    net_pnl = status.portfolio.equity - baseline
+    closed_metrics = _account_trade_metrics(engine)
     max_drawdown = calculate_max_drawdown(equity_curve)
-    expectancy = calculate_expectancy(returns)
     sharpe = calculate_sharpe_ratio(returns)
     sortino = calculate_sortino_ratio(returns)
-    profit_factor = calculate_profit_factor(returns)
     latest = engine.cycles[-1] if engine.cycles else None
     latest_evaluation = latest.strategy_evaluation if latest is not None else None
     profile_key = _strategy_key_for_name(strategy_name)
@@ -3807,18 +3875,21 @@ def _shadow_strategy_row(
         "strategy": _strategy_profiles()[profile_key]["label"],
         "parameter_profile": "default",
         "mode": "shadow_paper",
-        "status": "running",
+        "status": "halted" if engine.state(mark_price=mark_price).halted else "running",
         "evidence_type": "isolated_shadow_account",
         "completed_backtest": False,
         "selected": selected_parameter_profile == "default",
         "sample_size": str(status.cycles_count),
         "trade_count": str(status.trades_count),
-        "win_rate": str(win_rate),
-        "expectancy": str(expectancy),
+        **closed_metrics,
+        "starting_balance": str(baseline),
+        "return_pct": str(net_pnl / baseline * 100) if baseline else "not_available",
+        "last_processed_candle": _str(engine.last_processed_at),
+        "strategy_version": engine.strategy.config.version,
+        "history_scope": "cumulative_wallet_including_prior_versions",
         "max_drawdown": str(max_drawdown),
         "sharpe": str(sharpe),
         "sortino": str(sortino),
-        "profit_factor": str(profit_factor),
         "paper_pnl": str(net_pnl),
         "current_equity": str(status.portfolio.equity),
         "cash": str(status.portfolio.cash),
@@ -4255,26 +4326,45 @@ def _advanced_position_payload(
     }
 
 
+def _account_trade_metrics(engine: PaperTradingEngine) -> dict[str, JsonValue]:
+    try:
+        return dict(trade_metrics(engine.account.trades))
+    except ValueError:
+        return {
+            "metrics_basis": "incomplete_legacy_ledger",
+            "closed_trade_count": "not_available",
+            "fill_count": str(len(engine.account.trades)),
+            "win_rate": "not_available",
+            "expectancy": "not_available",
+            "profit_factor": "not_available",
+        }
+
+
 def _advanced_backtest_summary(
     *,
     status: PaperStatusResponse,
     latest: PaperTradingCycleResult | None,
     cycles: tuple[PaperTradingCycleResult, ...],
+    closed_metrics: Mapping[str, JsonValue] | None = None,
 ) -> dict[str, JsonValue]:
     sample_size = status.cycles_count
     equity_curve = _paper_equity_curve(cycles=cycles, status=status)
     returns = returns_from_equity(equity_curve)
     metric_status = "calculated" if returns else "insufficient_data"
+    position_metrics = closed_metrics or {}
     return {
         "status": "calculated_paper_sample",
         "sample_size": str(sample_size),
         "metric_status": metric_status,
-        "win_rate": _metric_or_status(calculate_win_rate(returns), metric_status),
-        "expectancy": _metric_or_status(calculate_expectancy(returns), metric_status),
+        "win_rate": position_metrics.get("win_rate", "not_available"),
+        "expectancy": position_metrics.get("expectancy", "not_available"),
+        "expectancy_unit": "USDT_per_closed_trade",
+        "trade_metrics_basis": position_metrics.get("metrics_basis", "not_available"),
+        "closed_trades": position_metrics.get("closed_trade_count", "not_available"),
         "max_drawdown": str(calculate_max_drawdown(equity_curve)),
         "sharpe": _metric_or_status(calculate_sharpe_ratio(returns), metric_status),
         "sortino": _metric_or_status(calculate_sortino_ratio(returns), metric_status),
-        "profit_factor": _metric_or_status(calculate_profit_factor(returns), metric_status),
+        "profit_factor": position_metrics.get("profit_factor", "not_available"),
         "fees": str(status.portfolio.fees_paid),
         "slippage": "paper_fill_model",
         "latest_signal_ref": _latest_signal_ref(latest),
@@ -5320,7 +5410,9 @@ def _save_paper_account_state(controller: PaperDashboardController) -> None:
     if controller.state_path is not None:
         path = Path(controller.state_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        temporary.replace(path)
 
 
 def _restore_paper_account_state(controller: PaperDashboardController) -> None:
@@ -5366,7 +5458,7 @@ def _restore_paper_account_state(controller: PaperDashboardController) -> None:
 def _paper_dashboard_state_payload(controller: PaperDashboardController) -> dict[str, JsonValue]:
     state = controller.engine.account.state
     return {
-        "version": 2,
+        "version": 3,
         "updated_at": _latest_time(controller.engine).isoformat(),
         "market_data_source": controller.market_data_source,
         "ui_preferences": {
@@ -5385,10 +5477,17 @@ def _paper_dashboard_state_payload(controller: PaperDashboardController) -> dict
             },
         },
         "account": _paper_account_state_payload(state),
+        "engine_runtime": dict(controller.engine.runtime_state()),
+        "controls": {
+            "paused": controller.api.control_state.paused,
+            "kill_switch_active": controller.api.control_state.kill_switch_active,
+        },
+        "missed_execution_candles": controller.missed_execution_candles,
         "trades": [_paper_trade_as_dict(trade) for trade in controller.engine.account.trades],
         "shadow_accounts": {
             name: {
                 "account": _paper_account_state_payload(engine.account.state),
+                "engine_runtime": dict(engine.runtime_state()),
                 "trades": [_paper_trade_as_dict(trade) for trade in engine.account.trades],
             }
             for name, engine in sorted(controller.shadow_engines.items())
@@ -5455,6 +5554,18 @@ def _restore_paper_payload(
         _paper_trade_from_mapping(item) for item in trades_payload if isinstance(item, Mapping)
     )
     controller.engine.account.restore_state(account_state, trades)
+    _restore_engine_runtime(controller.engine, payload.get("engine_runtime"))
+    controller.missed_execution_candles = int(str(payload.get("missed_execution_candles", 0)))
+    controls = payload.get("controls", {})
+    if isinstance(controls, Mapping):
+        if controls.get("kill_switch_active") is True:
+            controller.api.activate_kill_switch(
+                CONTROL_CONTEXT, reason="restored emergency stop", updated_at=datetime.now(UTC)
+            )
+        elif controls.get("paused") is True:
+            controller.api.pause(
+                CONTROL_CONTEXT, reason="restored pause", updated_at=datetime.now(UTC)
+            )
     shadow_payload = payload.get("shadow_accounts", {})
     if isinstance(shadow_payload, Mapping):
         for strategy_name, item in shadow_payload.items():
@@ -5476,6 +5587,9 @@ def _restore_paper_payload(
             controller.shadow_engines[strategy_name].account.restore_state(
                 _paper_account_state_from_mapping(shadow_account_payload),
                 shadow_trades,
+            )
+            _restore_engine_runtime(
+                controller.shadow_engines[strategy_name], item.get("engine_runtime")
             )
     open_orders_payload = payload.get("open_paper_orders", [])
     if isinstance(open_orders_payload, list):
@@ -5520,6 +5634,21 @@ def _restore_paper_payload(
             reason=source_ref,
             occurred_at=_latest_time(controller.engine),
         ),
+    )
+
+
+def _restore_engine_runtime(engine: PaperTradingEngine, payload: JsonValue) -> None:
+    if not isinstance(payload, Mapping):
+        return
+    cursor = _datetime_preference(payload.get("last_processed_at", ""))
+    # Startup history warms indicators only; never execute past candles on restore.
+    if engine.last_processed_at is not None:
+        cursor = max(cursor, engine.last_processed_at) if cursor else engine.last_processed_at
+    engine.restore_runtime_state(
+        stop_loss=Decimal(str(payload["stop_loss"])) if payload.get("stop_loss") else None,
+        take_profit=Decimal(str(payload["take_profit"])) if payload.get("take_profit") else None,
+        last_processed_at=cursor,
+        halted=payload.get("halted") is True,
     )
 
 

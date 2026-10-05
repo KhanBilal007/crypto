@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
+from sqlite3 import OperationalError
+from threading import Barrier
+
+import pytest
 
 from abtp.domain import (
     Asset,
@@ -33,6 +39,8 @@ from abtp.live import (
     LIVE_APPROVAL_CONFIRMATION,
     LiveApprovalToken,
     LiveMarketPreflight,
+    LivePreflightConfig,
+    LiveSubmissionLedger,
     SupervisedLiveGatewayConfig,
     SupervisedLiveTradingGateway,
 )
@@ -61,9 +69,9 @@ def test_gateway_lock_blocks_when_runtime_support_disabled() -> None:
     assert adapter.submitted_intents == ()
 
 
-def test_gateway_requires_manual_approval_before_adapter_submit() -> None:
+def test_gateway_requires_manual_approval_before_adapter_submit(tmp_path: Path) -> None:
     adapter = FakeLiveAdapter()
-    gateway = _enabled_gateway(adapter)
+    gateway = _enabled_gateway(adapter, tmp_path)
     intent = _approved_intent()
 
     result = gateway.submit(intent, approval=None, market=_market(), submitted_at=NOW)
@@ -73,9 +81,9 @@ def test_gateway_requires_manual_approval_before_adapter_submit() -> None:
     assert adapter.submitted_intents == ()
 
 
-def test_gateway_blocks_preflight_failure_before_adapter_submit() -> None:
+def test_gateway_blocks_preflight_failure_before_adapter_submit(tmp_path: Path) -> None:
     adapter = FakeLiveAdapter()
-    gateway = _enabled_gateway(adapter)
+    gateway = _enabled_gateway(adapter, tmp_path)
     intent = _approved_intent(quantity=Decimal("0.001"))
     approval = _approval(intent, max_quantity=Decimal("0.001"), max_notional=Decimal("200"))
 
@@ -86,9 +94,9 @@ def test_gateway_blocks_preflight_failure_before_adapter_submit() -> None:
     assert adapter.submitted_intents == ()
 
 
-def test_gateway_submits_only_after_risk_preflight_and_approval() -> None:
+def test_gateway_submits_only_after_risk_preflight_and_approval(tmp_path: Path) -> None:
     adapter = FakeLiveAdapter()
-    gateway = _enabled_gateway(adapter)
+    gateway = _enabled_gateway(adapter, tmp_path)
     intent = _approved_intent()
 
     result = gateway.submit(
@@ -128,13 +136,322 @@ def test_gateway_requires_live_mode_adapter() -> None:
     assert adapter.submitted_intents == ()
 
 
-def _enabled_gateway(adapter: FakeLiveAdapter) -> SupervisedLiveTradingGateway:
+def test_enabled_gateway_requires_persistent_ledger() -> None:
+    adapter = FakeLiveAdapter()
+    gateway = SupervisedLiveTradingGateway(
+        adapter=adapter,
+        config=SupervisedLiveGatewayConfig(
+            enable_supervised_live=True,
+            runtime_live_execution_supported=True,
+        ),
+        clock=lambda: NOW,
+    )
+    intent = _approved_intent()
+    result = gateway.submit(intent, approval=_approval(intent), market=_market(), submitted_at=NOW)
+    assert not result.accepted
+    assert "persistent submission ledger is required" in result.reason
+    assert not adapter.submitted_intents
+
+
+@pytest.mark.parametrize("restart", [False, True])
+@pytest.mark.parametrize("new_approval", [False, True])
+def test_duplicate_intent_is_blocked_even_with_fresh_approval_after_restart(
+    tmp_path: Path, restart: bool, new_approval: bool
+) -> None:
+    adapter = FakeLiveAdapter()
+    gateway = _enabled_gateway(adapter, tmp_path)
+    intent = _approved_intent()
+    approval = _approval(intent)
+    assert gateway.submit(intent, approval=approval, market=_market(), submitted_at=NOW).accepted
+    if restart:
+        gateway = _enabled_gateway(adapter, tmp_path)
+    second = gateway.submit(
+        intent,
+        approval=_approval(intent) if new_approval else approval,
+        market=_market(),
+        submitted_at=NOW,
+    )
+    assert not second.accepted
+    assert "already been consumed" in second.reason
+    assert adapter.submitted_intents == (intent,)
+
+
+def test_approval_identifier_cannot_be_rebound_to_a_new_intent(tmp_path: Path) -> None:
+    adapter = FakeLiveAdapter()
+    gateway = _enabled_gateway(adapter, tmp_path)
+    intent = _approved_intent()
+    approval = _approval(intent)
+    assert gateway.submit(intent, approval=approval, market=_market(), submitted_at=NOW).accepted
+    second_intent = _approved_intent()
+    result = gateway.submit(
+        second_intent,
+        approval=replace(approval, order_intent_id=second_intent.id),
+        market=_market(),
+        submitted_at=NOW,
+    )
+    assert not result.accepted
+    assert "already been consumed" in result.reason
+    assert len(adapter.submitted_intents) == 1
+
+
+def test_concurrent_gateway_instances_submit_the_intent_only_once(tmp_path: Path) -> None:
+    adapter = FakeLiveAdapter()
+    gateways = [_enabled_gateway(adapter, tmp_path), _enabled_gateway(adapter, tmp_path)]
+    intent = _approved_intent()
+    approval = _approval(intent)
+    barrier = Barrier(2)
+
+    def submit(gateway: SupervisedLiveTradingGateway) -> bool:
+        barrier.wait(timeout=5)
+        return gateway.submit(
+            intent, approval=approval, market=_market(), submitted_at=NOW
+        ).accepted
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(submit, gateways))
+    assert sum(results) == 1
+    assert adapter.submitted_intents == (intent,)
+
+
+def test_timeout_blocks_retries_and_new_intents_across_restart(tmp_path: Path) -> None:
+    class TimeoutAdapter(FakeLiveAdapter):
+        def submit_order(self, intent: OrderIntent) -> ExchangeOrder:
+            super().submit_order(intent)
+            raise TimeoutError("response lost after order reached exchange")
+
+    adapter = TimeoutAdapter()
+    gateway = _enabled_gateway(adapter, tmp_path)
+    intent = _approved_intent()
+    result = gateway.submit(intent, approval=_approval(intent), market=_market(), submitted_at=NOW)
+    assert not result.accepted
+    assert "outcome unknown; reconciliation required" in result.reason
+    restarted = _enabled_gateway(adapter, tmp_path)
+    duplicate = restarted.submit(
+        intent, approval=_approval(intent), market=_market(), submitted_at=NOW
+    )
+    assert "already been consumed" in duplicate.reason
+    other = _approved_intent()
+    blocked = restarted.submit(other, approval=_approval(other), market=_market(), submitted_at=NOW)
+    assert not blocked.accepted
+    assert "previous submission requires reconciliation" in blocked.reason
+    assert adapter.submitted_intents == (intent,)
+
+
+def test_crash_after_reservation_blocks_submission_on_restart(tmp_path: Path) -> None:
+    intent = _approved_intent()
+    ledger = LiveSubmissionLedger(tmp_path / "submissions.sqlite")
+    ledger.reserve(intent, approval_id=None, exchange_name="fake-live", reserved_at=NOW)
+    adapter = FakeLiveAdapter()
+    gateway = _enabled_gateway(adapter, tmp_path)
+    other = _approved_intent()
+    result = gateway.submit(other, approval=_approval(other), market=_market(), submitted_at=NOW)
+    assert not result.accepted
+    assert "reconciliation" in result.reason
+    assert not adapter.submitted_intents
+
+
+def test_missing_ledger_fails_closed_without_recreating_it(tmp_path: Path) -> None:
+    adapter = FakeLiveAdapter()
+    gateway = _enabled_gateway(adapter, tmp_path)
+    path = tmp_path / "submissions.sqlite"
+    path.unlink()
+    intent = _approved_intent()
+    result = gateway.submit(intent, approval=_approval(intent), market=_market(), submitted_at=NOW)
+    assert not result.accepted
+    assert "ledger unavailable; no order sent" in result.reason
+    assert not path.exists()
+    assert not adapter.submitted_intents
+
+
+def test_outcome_storage_failure_keeps_reconciliation_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(*args: object, **kwargs: object) -> None:
+        raise OperationalError("disk full")
+
+    adapter = FakeLiveAdapter()
+    gateway = _enabled_gateway(adapter, tmp_path)
+    monkeypatch.setattr(LiveSubmissionLedger, "record_outcome", fail)
+    intent = _approved_intent()
+    result = gateway.submit(intent, approval=_approval(intent), market=_market(), submitted_at=NOW)
+    assert not result.accepted
+    assert "attempted but result could not be persisted" in result.reason
+    other = _approved_intent()
+    result = _enabled_gateway(adapter, tmp_path).submit(
+        other,
+        approval=_approval(other),
+        market=_market(),
+        submitted_at=NOW,
+    )
+    assert "reconciliation" in result.reason
+    assert len(adapter.submitted_intents) == 1
+
+
+@pytest.mark.parametrize("offset", [-31, 3])
+def test_gateway_rejects_stale_or_future_submission_time(tmp_path: Path, offset: int) -> None:
+    adapter = FakeLiveAdapter()
+    gateway = _enabled_gateway(adapter, tmp_path)
+    intent = _approved_intent()
+    result = gateway.submit(
+        intent,
+        approval=_approval(intent),
+        market=_market(),
+        submitted_at=NOW + timedelta(seconds=offset),
+    )
+    assert not result.accepted
+    assert "submission timestamp" in result.reason
+    assert not adapter.submitted_intents
+
+
+def test_inputs_are_rechecked_after_storage_wait(tmp_path: Path) -> None:
+    adapter = FakeLiveAdapter()
+    times = iter((NOW, NOW + timedelta(seconds=31), NOW + timedelta(seconds=31)))
+    gateway = SupervisedLiveTradingGateway(
+        adapter=adapter,
+        config=SupervisedLiveGatewayConfig(
+            enable_supervised_live=True,
+            runtime_live_execution_supported=True,
+        ),
+        submission_ledger=LiveSubmissionLedger(tmp_path / "submissions.sqlite"),
+        clock=lambda: next(times),
+    )
+    intent = _approved_intent()
+    result = gateway.submit(intent, approval=_approval(intent), market=_market(), submitted_at=NOW)
+    assert not result.accepted
+    assert "market snapshot is stale" in result.reason
+    assert not adapter.submitted_intents
+
+
+def test_in_memory_submission_ledger_is_not_allowed() -> None:
+    with pytest.raises(ValueError, match="persistent file"):
+        LiveSubmissionLedger(Path(":memory:"))
+
+
+def test_mismatched_exchange_response_requires_reconciliation(tmp_path: Path) -> None:
+    class MismatchAdapter(FakeLiveAdapter):
+        def submit_order(self, intent: OrderIntent) -> ExchangeOrder:
+            return replace(super().submit_order(intent), intent=_approved_intent())
+
+    adapter = MismatchAdapter()
+    gateway = _enabled_gateway(adapter, tmp_path)
+    intent = _approved_intent()
+    result = gateway.submit(intent, approval=_approval(intent), market=_market(), submitted_at=NOW)
+    assert not result.accepted
+    assert "response mismatch; reconciliation required" in result.reason
+    other = _approved_intent()
+    blocked = _enabled_gateway(adapter, tmp_path).submit(
+        other,
+        approval=_approval(other),
+        market=_market(),
+        submitted_at=NOW,
+    )
+    assert not blocked.accepted
+    assert "reconciliation" in blocked.reason
+    assert len(adapter.submitted_intents) == 1
+
+
+def test_invalid_approval_does_not_consume_an_unused_intent(tmp_path: Path) -> None:
+    adapter = FakeLiveAdapter()
+    gateway = _enabled_gateway(adapter, tmp_path)
+    intent = _approved_intent()
+    result = gateway.submit(intent, approval=None, market=_market(), submitted_at=NOW)
+    assert not result.accepted
+    assert gateway.submit(
+        intent,
+        approval=_approval(intent),
+        market=_market(),
+        submitted_at=NOW,
+    ).accepted
+    assert adapter.submitted_intents == (intent,)
+
+
+def test_approval_expiring_during_storage_wait_cannot_reach_adapter(tmp_path: Path) -> None:
+    adapter = FakeLiveAdapter()
+    times = iter((NOW, NOW + timedelta(minutes=5), NOW + timedelta(minutes=5)))
+    gateway = SupervisedLiveTradingGateway(
+        adapter=adapter,
+        config=SupervisedLiveGatewayConfig(
+            enable_supervised_live=True,
+            runtime_live_execution_supported=True,
+            preflight_config=LivePreflightConfig(
+                max_market_age=timedelta(minutes=5),
+                max_account_age=timedelta(minutes=5),
+            ),
+        ),
+        submission_ledger=LiveSubmissionLedger(tmp_path / "submissions.sqlite"),
+        clock=lambda: next(times),
+    )
+    intent = _approved_intent()
+    result = gateway.submit(intent, approval=_approval(intent), market=_market(), submitted_at=NOW)
+    assert not result.accepted
+    assert "approval token is expired" in result.reason
+    assert not adapter.submitted_intents
+
+
+def test_historical_client_timestamps_cannot_override_gateway_clock(tmp_path: Path) -> None:
+    adapter = FakeLiveAdapter()
+    gateway = SupervisedLiveTradingGateway(
+        adapter=adapter,
+        config=SupervisedLiveGatewayConfig(
+            enable_supervised_live=True,
+            runtime_live_execution_supported=True,
+        ),
+        submission_ledger=LiveSubmissionLedger(tmp_path / "submissions.sqlite"),
+        clock=lambda: NOW + timedelta(days=1),
+    )
+    intent = _approved_intent()
+    result = gateway.submit(intent, approval=_approval(intent), market=_market(), submitted_at=NOW)
+    assert not result.accepted
+    assert "submission timestamp is stale" in result.reason
+    assert not adapter.submitted_intents
+
+
+def test_persistent_halt_is_enforced_by_every_gateway_instance(tmp_path: Path) -> None:
+    adapter = FakeLiveAdapter()
+    gateway = _enabled_gateway(adapter, tmp_path)
+    ledger = LiveSubmissionLedger(tmp_path / "submissions.sqlite")
+    ledger.set_halt(reason="operator emergency stop", occurred_at=NOW)
+    intent = _approved_intent()
+    result = gateway.submit(intent, approval=_approval(intent), market=_market(), submitted_at=NOW)
+    assert not result.accepted and "halted" in result.reason
+    restarted = _enabled_gateway(adapter, tmp_path)
+    assert not restarted.submit(
+        intent, approval=_approval(intent), market=_market(), submitted_at=NOW
+    ).accepted
+    assert not adapter.submitted_intents
+    ledger.resume_after_review(reason="operator reviewed isolated test", occurred_at=NOW)
+    assert restarted.submit(
+        intent, approval=_approval(intent), market=_market(), submitted_at=NOW
+    ).accepted
+
+
+def test_halt_during_reservation_prevents_exchange_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = FakeLiveAdapter()
+    gateway = _enabled_gateway(adapter, tmp_path)
+    reserve = LiveSubmissionLedger.reserve
+
+    def reserve_then_halt(self: LiveSubmissionLedger, *args: object, **kwargs: object) -> None:
+        reserve(self, *args, **kwargs)  # type: ignore[arg-type]
+        self.set_halt(reason="emergency while reserving", occurred_at=NOW)
+
+    monkeypatch.setattr(LiveSubmissionLedger, "reserve", reserve_then_halt)
+    intent = _approved_intent()
+    result = gateway.submit(intent, approval=_approval(intent), market=_market(), submitted_at=NOW)
+    assert not result.accepted and "halted" in result.reason
+    assert not adapter.submitted_intents
+
+
+def _enabled_gateway(adapter: FakeLiveAdapter, tmp_path: Path) -> SupervisedLiveTradingGateway:
     return SupervisedLiveTradingGateway(
         adapter=adapter,
         config=SupervisedLiveGatewayConfig(
             enable_supervised_live=True,
             runtime_live_execution_supported=True,
         ),
+        submission_ledger=LiveSubmissionLedger(tmp_path / "submissions.sqlite"),
+        clock=lambda: NOW,
     )
 
 
@@ -169,6 +486,7 @@ def _market() -> LiveMarketPreflight:
             ip_allowlist=("203.0.113.10",),
         ),
         checked_at=NOW,
+        account_checked_at=NOW,
     )
 
 

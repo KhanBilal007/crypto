@@ -228,6 +228,13 @@ def default_feature_schema() -> FeatureSchema:
                 "Latest volume divided by prior-window average volume.",
             ),
             _feature(
+                "execution.round_trip_cost_pct",
+                FeatureSourceKind.PARAMETER,
+                "paper_fill_costs",
+                False,
+                "Estimated entry and exit fees, spread and slippage as a price fraction.",
+            ),
+            _feature(
                 "indicator.sma.sma",
                 FeatureSourceKind.INDICATOR,
                 "sma.sma",

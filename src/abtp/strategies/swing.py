@@ -14,7 +14,7 @@ from abtp.strategies.base import (
     StrategySignalPlan,
 )
 
-SWING_STRATEGY_VERSION = "stage-072.v1"
+SWING_STRATEGY_VERSION = "stage-073.v2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,7 +60,7 @@ class TrendPullbackStrategy:
         return self._config
 
     def evaluate(self, context: StrategyContext) -> StrategyEvaluation:
-        common = _common_rejections(self.config, context)
+        common = _common_rejections(self.config, context, entry=False)
         if common:
             return _evaluation(self.config, context, SignalDirection.HOLD, Decimal("0"), common)
         values = context.features.values
@@ -78,6 +78,9 @@ class TrendPullbackStrategy:
                 self.config.sell_confidence,
                 ("trend confirmation broke below EMA 21",),
             )
+        entry_block = _entry_block(self.config, context)
+        if entry_block is not None:
+            return entry_block
         if not (ema_9 is not None and ema_21 is not None and close > ema_21 and ema_9 > ema_21):
             return _evaluation(
                 self.config,
@@ -101,6 +104,14 @@ class TrendPullbackStrategy:
                 SignalDirection.HOLD,
                 Decimal("0"),
                 ("RSI is not in pullback recovery range",),
+            )
+        if values.get("market.return_1", Decimal("0")) <= 0:
+            return _evaluation(
+                self.config,
+                context,
+                SignalDirection.HOLD,
+                Decimal("0"),
+                ("pullback recovery has not closed higher yet",),
             )
         return _buy_with_atr(
             self.config,
@@ -126,7 +137,7 @@ class BreakoutStrategy:
         return self._config
 
     def evaluate(self, context: StrategyContext) -> StrategyEvaluation:
-        common = _common_rejections(self.config, context)
+        common = _common_rejections(self.config, context, entry=False)
         if common:
             return _evaluation(self.config, context, SignalDirection.HOLD, Decimal("0"), common)
         values = context.features.values
@@ -134,14 +145,20 @@ class BreakoutStrategy:
         resistance = values.get("market.resistance_20")
         support = values.get("market.support_20")
         exposure = values.get("portfolio.exposure_base", Decimal("0"))
-        if exposure > Decimal("0") and support is not None and close < support:
+        ema_21 = values.get("indicator.ema_21")
+        if exposure > Decimal("0") and (
+            (support is not None and close < support) or (ema_21 is not None and close < ema_21)
+        ):
             return _evaluation(
                 self.config,
                 context,
                 SignalDirection.SELL,
                 self.config.sell_confidence,
-                ("breakout failed below support",),
+                ("breakout failed below support or EMA 21",),
             )
+        entry_block = _entry_block(self.config, context)
+        if entry_block is not None:
+            return entry_block
         if resistance is None or close <= resistance * Decimal("1.001"):
             return _evaluation(
                 self.config,
@@ -182,7 +199,7 @@ class SupportResistanceReboundStrategy:
         return self._config
 
     def evaluate(self, context: StrategyContext) -> StrategyEvaluation:
-        common = _common_rejections(self.config, context)
+        common = _common_rejections(self.config, context, entry=False)
         if common:
             return _evaluation(self.config, context, SignalDirection.HOLD, Decimal("0"), common)
         values = context.features.values
@@ -209,6 +226,17 @@ class SupportResistanceReboundStrategy:
                 self.config.sell_confidence,
                 ("range exit: resistance reached or support failed",),
             )
+        entry_block = _entry_block(self.config, context)
+        if entry_block is not None:
+            return entry_block
+        if near_resistance or close < support or values.get("market.return_1", Decimal("0")) <= 0:
+            return _evaluation(
+                self.config,
+                context,
+                SignalDirection.HOLD,
+                Decimal("0"),
+                ("support must hold and rebound before entry, with room to resistance",),
+            )
         if not near_support:
             return _evaluation(
                 self.config,
@@ -229,12 +257,15 @@ class SupportResistanceReboundStrategy:
             self.config,
             context,
             ("support rebound with range, RSI, volume, spread, and risk inputs passed",),
+            target_ceiling=resistance * Decimal("0.985"),
         )
 
 
 def _common_rejections(
     config: SwingStrategyConfig,
     context: StrategyContext,
+    *,
+    entry: bool = True,
 ) -> tuple[str, ...]:
     values = context.features.values
     reasons: list[str] = []
@@ -248,24 +279,59 @@ def _common_rejections(
         reasons.append("feature snapshot quality is not trusted")
     if values.get("liquidity.spread_bps", Decimal("999999")) > config.max_spread_bps:
         reasons.append("spread exceeds ceiling")
-    if values.get("market.volume_ratio", Decimal("0")) < config.min_volume_ratio:
+    if entry and values.get("market.volume_ratio", Decimal("0")) < config.min_volume_ratio:
         reasons.append("volume confirmation is below threshold")
-    if values.get("indicator.atr.atr_pct", Decimal("0")) <= Decimal("0"):
+    if entry and values.get("indicator.atr.atr_pct", Decimal("0")) <= Decimal("0"):
         reasons.append("ATR stop distance is required")
-    if context.regime is not None and context.regime.label is MarketRegimeLabel.TREND_DOWN:
+    if (
+        entry
+        and context.regime is not None
+        and context.regime.label is MarketRegimeLabel.TREND_DOWN
+    ):
         reasons.append("downtrend regime blocks long swing entries")
     return tuple(dict.fromkeys(reasons))
+
+
+def _entry_block(
+    config: SwingStrategyConfig,
+    context: StrategyContext,
+) -> StrategyEvaluation | None:
+    if context.features.values.get("portfolio.exposure_base", Decimal("0")) > 0:
+        return _evaluation(
+            config,
+            context,
+            SignalDirection.HOLD,
+            Decimal("0"),
+            ("manage existing position; no repeated entry",),
+        )
+    reasons = _common_rejections(config, context)
+    if reasons:
+        return _evaluation(config, context, SignalDirection.HOLD, Decimal("0"), reasons)
+    return None
 
 
 def _buy_with_atr(
     config: SwingStrategyConfig,
     context: StrategyContext,
     reasons: tuple[str, ...],
+    *,
+    target_ceiling: Decimal | None = None,
 ) -> StrategyEvaluation:
     close = context.features.values["market.close"]
     atr_pct = context.features.values["indicator.atr.atr_pct"]
     stop = close - close * atr_pct * config.atr_stop_multiplier
     target = close + (close - stop) * config.reward_risk_ratio
+    cost_pct = context.features.values.get("execution.round_trip_cost_pct", Decimal("0"))
+    if (
+        target_ceiling is not None and target > target_ceiling
+    ) or target - close <= close * cost_pct * 2:
+        return _evaluation(
+            config,
+            context,
+            SignalDirection.HOLD,
+            Decimal("0"),
+            ("available reward is too small for risk and trading costs",),
+        )
     if stop <= Decimal("0"):
         return _evaluation(
             config,

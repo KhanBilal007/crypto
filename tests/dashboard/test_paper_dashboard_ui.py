@@ -159,11 +159,12 @@ def test_advanced_trader_view_has_chart_metrics_exit_review_and_exports(tmp_path
     assert "Very small sample" in advanced["backtest_summary"]["sample_size_warning"]  # type: ignore[index]
     assert advanced["backtest_summary"]["status"] == "calculated_paper_sample"  # type: ignore[index]
     assert advanced["backtest_summary"]["metric_status"] == "calculated"  # type: ignore[index]
-    assert advanced["backtest_summary"]["win_rate"] == "0.5"  # type: ignore[index]
-    assert Decimal(str(advanced["backtest_summary"]["expectancy"])) > Decimal("0")  # type: ignore[index]
+    assert advanced["backtest_summary"]["win_rate"] == "not_available"  # type: ignore[index]
+    assert advanced["backtest_summary"]["expectancy"] == "not_available"  # type: ignore[index]
+    assert advanced["backtest_summary"]["closed_trades"] == "0"  # type: ignore[index]
     assert Decimal(str(advanced["backtest_summary"]["sharpe"])) > Decimal("0")  # type: ignore[index]
     assert Decimal(str(advanced["backtest_summary"]["sortino"])) > Decimal("0")  # type: ignore[index]
-    assert Decimal(str(advanced["backtest_summary"]["profit_factor"])) > Decimal("1")  # type: ignore[index]
+    assert advanced["backtest_summary"]["profit_factor"] == "not_available"  # type: ignore[index]
     assert advanced["backtest_summary"]["latest_signal_ref"] == "no_signal_ref"  # type: ignore[index]
     assert advanced["performance"]["daily"] == "0.000138158800"  # type: ignore[index]
     assert advanced["performance"]["weekly"] == "0.000138158800"  # type: ignore[index]
@@ -414,6 +415,9 @@ def test_strategy_lab_lists_four_shadow_test_strategies(tmp_path: Path) -> None:
     assert {row["strategy_key"] for row in compare_runs} == strategy_values  # type: ignore[index]
     assert all(row["mode"] == "shadow_paper" for row in compare_runs)  # type: ignore[index]
     assert all("risk_score" in row for row in compare_runs)  # type: ignore[index]
+    assert [row["strategy_key"] for row in compare_runs if row["selected"]] == [  # type: ignore[index]
+        "min_risk_spot_v1"
+    ]
 
 
 def test_strategy_lab_selection_can_be_saved_without_live_permissions(tmp_path: Path) -> None:
@@ -851,12 +855,24 @@ def test_binance_daily_trend_blocks_hourly_buy(monkeypatch: pytest.MonkeyPatch) 
     assert state["suggested_paper_trade"]["stop_loss"] == "not_executable"  # type: ignore[index]
     assert state["suggested_paper_trade"]["target"] == "not_executable"  # type: ignore[index]
     assert state["suggested_paper_trade"]["reward_to_risk"] == "not_executable"  # type: ignore[index]
-    assert "1d trend blocks paper buy" in state["strategy"]["explanation"]  # type: ignore[index]
+    assert "observation only" in state["strategy"]["explanation"]  # type: ignore[index]
+    latest = controller.engine.cycles[-1]
+    evaluation = controller.engine.strategy.evaluate(
+        paper_app.StrategyContext(
+            features=latest.features,
+            generated_at=latest.snapshot.received_at,
+            timeframe="1h",
+            regime=latest.regime,
+        )
+    )
+    assert "1d trend blocks paper buy" in evaluation.reasons[0]
+    assert not controller.engine.account.trades
+    assert all(not engine.account.trades for engine in controller.shadow_engines.values())
     advanced = state["views"]["advanced_trader"]  # type: ignore[index]
-    assert advanced["chart"]["risk_lines"]["stop_loss"] == "not_executable"  # type: ignore[index]
-    assert advanced["chart"]["risk_lines"]["target"] == "not_executable"  # type: ignore[index]
-    assert advanced["position"]["stop_loss"] == "not_executable"  # type: ignore[index]
-    assert advanced["position"]["target"] == "not_executable"  # type: ignore[index]
+    assert advanced["chart"]["risk_lines"]["stop_loss"] == "not_available"  # type: ignore[index]
+    assert advanced["chart"]["risk_lines"]["target"] == "not_available"  # type: ignore[index]
+    assert advanced["position"]["stop_loss"] == "not_available"  # type: ignore[index]
+    assert advanced["position"]["target"] == "not_available"  # type: ignore[index]
     beginner = state["views"]["beginner"]  # type: ignore[index]
     assert beginner["command"]["label"] == "Do nothing now"  # type: ignore[index]
     assert beginner["command"]["approval_enabled"] is False  # type: ignore[index]

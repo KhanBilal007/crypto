@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
@@ -26,9 +26,12 @@ from abtp.domain import (
     RiskCheck,
     RiskDecision,
     RiskDecisionStatus,
+    Signal,
+    SignalDirection,
 )
 from abtp.execution import ExecutionEngineConfig, ExecutionResult, PaperSafeExecutionEngine
 from abtp.features import FEATURE_SCHEMA_VERSION, FeatureSnapshot
+from abtp.indicators.volatility import atr
 from abtp.paper.account import PaperAccountConfig, PaperTrade, PaperTradingAccount
 from abtp.paper.simulator import (
     PaperFillSimulationConfig,
@@ -36,7 +39,7 @@ from abtp.paper.simulator import (
     estimate_paper_fill,
 )
 from abtp.risk import RiskEngineConfig, RiskEvaluationRequest, RiskManagementEngine, RiskPolicy
-from abtp.strategies import StrategyContext, StrategyEvaluation, StrategyPlugin
+from abtp.strategies import StrategyContext, StrategyEvaluation, StrategyPlugin, StrategySignalPlan
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,12 +51,17 @@ class PaperTradingConfig:
     fill_simulation: PaperFillSimulationConfig = PaperFillSimulationConfig()
     max_drawdown_halt_pct: Decimal = Decimal("0.10")
     block_degraded_data: bool = True
+    minimum_history: int = 1
+    allow_pyramiding: bool = True
+    enforce_protective_exits: bool = True
 
     def __post_init__(self) -> None:
         if not self.timeframe.strip():
             raise ValueError("timeframe is required")
         if self.order_quantity <= Decimal("0"):
             raise ValueError("order_quantity must be positive")
+        if self.minimum_history < 1:
+            raise ValueError("minimum_history must be positive")
         if not Decimal("0") <= self.max_drawdown_halt_pct <= Decimal("1"):
             raise ValueError("max_drawdown_halt_pct must be between 0 and 1")
 
@@ -131,8 +139,9 @@ class PaperTradingEngine:
         self._account = account or PaperTradingAccount(PaperAccountConfig())
         self._regime_classifier = MarketRegimeClassifier()
         self._risk_engine = RiskManagementEngine(
-            policy=risk_policy
-            or RiskPolicy(
+            policy=replace(risk_policy, fee_bps=config.fill_simulation.fee_bps)
+            if risk_policy
+            else RiskPolicy(
                 fee_bps=config.fill_simulation.fee_bps,
                 max_spread_bps=max(config.fill_simulation.spread_bps, Decimal("50")),
                 max_slippage_bps=max(config.fill_simulation.slippage_bps, Decimal("25")),
@@ -146,6 +155,46 @@ class PaperTradingEngine:
         self._candles: list[Candle] = []
         self._cycles: list[PaperTradingCycleResult] = []
         self._halted = False
+        self._stop_loss: Decimal | None = None
+        self._take_profit: Decimal | None = None
+        self._last_processed_at: datetime | None = None
+
+    @property
+    def strategy(self) -> StrategyPlugin:
+        return self._strategy
+
+    @property
+    def last_processed_at(self) -> datetime | None:
+        return self._last_processed_at
+
+    def runtime_state(self) -> dict[str, str | bool | None]:
+        """Persist exit levels and the candle cursor alongside the paper wallet."""
+        return {
+            "stop_loss": str(self._stop_loss) if self._stop_loss is not None else None,
+            "take_profit": str(self._take_profit) if self._take_profit is not None else None,
+            "last_processed_at": self._last_processed_at.isoformat()
+            if self._last_processed_at
+            else None,
+            "halted": self._halted,
+        }
+
+    def restore_runtime_state(
+        self,
+        *,
+        stop_loss: Decimal | None,
+        take_profit: Decimal | None,
+        last_processed_at: datetime | None,
+        halted: bool = False,
+    ) -> None:
+        if any(
+            value is not None and (not value.is_finite() or value <= 0)
+            for value in (stop_loss, take_profit)
+        ):
+            raise ValueError("persisted protection prices must be finite and positive")
+        self._stop_loss = stop_loss
+        self._take_profit = take_profit
+        self._last_processed_at = last_processed_at
+        self._halted = halted
 
     @property
     def account(self) -> PaperTradingAccount:
@@ -171,6 +220,8 @@ class PaperTradingEngine:
         update: LiveMarketDataUpdate | PaperMarketSnapshot,
         *,
         received_at: datetime | None = None,
+        execute: bool = True,
+        execution_reference_price: Decimal | None = None,
     ) -> PaperTradingCycleResult:
         """Process one live-like data update without real order execution."""
 
@@ -182,10 +233,50 @@ class PaperTradingEngine:
             if isinstance(update, LiveMarketDataUpdate)
             else update
         )
+        if snapshot.candle.closed_at > snapshot.received_at:
+            raise ValueError("cannot process an unfinished candle")
+        if self._candles and snapshot.candle.closed_at <= self._candles[-1].closed_at:
+            if snapshot.candle == self._candles[-1] and self._cycles:
+                return self._cycles[-1]
+            raise ValueError("paper candles must be unique and chronological")
         self._candles.append(snapshot.candle)
+        # Bound indicator work while retaining more than ten EMA-50 lookbacks.
+        self._candles = self._candles[-600:]
+        self._last_processed_at = snapshot.candle.closed_at
         features = self._build_feature_snapshot(snapshot)
         regime = self._regime_classifier.classify(features)
         skipped_reason = self._skip_reason(snapshot, features)
+        if not execute:
+            skipped_reason = "observation only; no historical or paused fills"
+        elif len(self._candles) < self._config.minimum_history:
+            skipped_reason = "indicator warmup"
+        protection = (
+            self._protective_exit(snapshot, features)
+            if execute and not snapshot.health.is_stale and not snapshot.health.is_degraded
+            else None
+        )
+        if protection is not None:
+            evaluation, reference_price = protection
+            execution_result, risk_status = self._maybe_execute(
+                evaluation,
+                snapshot,
+                features,
+                reference_price=reference_price,
+            )
+            if execution_result is not None:
+                self.account.apply_execution(execution_result, mark_price=snapshot.candle.close)
+                self._clear_closed_protection()
+            return self._record_cycle(
+                PaperTradingCycleResult(
+                    snapshot=snapshot,
+                    features=features,
+                    regime=regime,
+                    strategy_evaluation=evaluation,
+                    risk_decision_status=risk_status,
+                    execution_result=execution_result,
+                    equity=self.account.equity(snapshot.candle.close),
+                )
+            )
         if skipped_reason is not None:
             self.account.mark_to_market(snapshot.candle.close)
             return self._record_cycle(
@@ -207,9 +298,18 @@ class PaperTradingEngine:
             regime=regime,
         )
         evaluation = self._strategy.evaluate(context)
-        execution_result, risk_status = self._maybe_execute(evaluation, snapshot, features)
+        execution_result, risk_status = self._maybe_execute(
+            evaluation,
+            snapshot,
+            features,
+            reference_price=execution_reference_price,
+        )
         if execution_result is not None:
             self.account.apply_execution(execution_result, mark_price=snapshot.candle.close)
+            if execution_result.accepted and evaluation.signal.direction is SignalDirection.BUY:
+                self._stop_loss = evaluation.plan.stop_suggestion
+                self._take_profit = evaluation.plan.target_suggestion
+            self._clear_closed_protection()
         else:
             self.account.mark_to_market(snapshot.candle.close)
         return self._record_cycle(
@@ -255,6 +355,8 @@ class PaperTradingEngine:
         evaluation: StrategyEvaluation,
         snapshot: PaperMarketSnapshot,
         features: FeatureSnapshot,
+        *,
+        reference_price: Decimal | None = None,
     ) -> tuple[ExecutionResult | None, str | None]:
         if not evaluation.is_trade_signal:
             return None, None
@@ -265,14 +367,21 @@ class PaperTradingEngine:
         )
         if order_side is OrderSide.SELL and self.account.state.base_quantity <= Decimal("0"):
             return None, "no_position_to_sell"
+        if (
+            order_side is OrderSide.BUY
+            and not self._config.allow_pyramiding
+            and self.account.state.base_quantity > 0
+        ):
+            return None, "existing_position"
+        execution_price = reference_price if reference_price is not None else snapshot.candle.close
         estimate = estimate_paper_fill(
-            reference_price=snapshot.candle.close,
+            reference_price=execution_price,
             side=order_side,
             config=self._config.fill_simulation,
         )
         proposed_order_id = uuid4()
         if order_side is OrderSide.SELL:
-            quantity = min(self._config.order_quantity, self.account.state.base_quantity)
+            quantity = self.account.state.base_quantity
             risk_decision = RiskDecision(
                 order_intent_id=proposed_order_id,
                 status=RiskDecisionStatus.APPROVED,
@@ -306,7 +415,7 @@ class PaperTradingEngine:
                     intent,
                     idempotency_key=f"paper:{proposed_order_id}",
                     submitted_at=snapshot.received_at,
-                    execution_price=snapshot.candle.close,
+                    execution_price=execution_price,
                 ),
                 "approved_exit",
             )
@@ -344,10 +453,59 @@ class PaperTradingEngine:
                 intent,
                 idempotency_key=f"paper:{proposed_order_id}",
                 submitted_at=snapshot.received_at,
-                execution_price=snapshot.candle.close,
+                execution_price=execution_price,
             ),
             risk_decision.status.value,
         )
+
+    def _clear_closed_protection(self) -> None:
+        if self.account.state.base_quantity == 0:
+            self._stop_loss = None
+            self._take_profit = None
+
+    def _protective_exit(
+        self,
+        snapshot: PaperMarketSnapshot,
+        features: FeatureSnapshot,
+    ) -> tuple[StrategyEvaluation, Decimal] | None:
+        if not self._config.enforce_protective_exits or self.account.state.base_quantity <= 0:
+            return None
+        candle = snapshot.candle
+        # If both levels were crossed, assume the stop happened first. Gaps fill worse.
+        if self._stop_loss is not None and candle.low <= self._stop_loss:
+            reason = "protective stop-loss triggered"
+            price = min(candle.open, self._stop_loss)
+        elif self._take_profit is not None and candle.high >= self._take_profit:
+            reason = "protective take-profit triggered"
+            price = self._take_profit
+        elif self._halted:
+            reason = "drawdown halt closes existing exposure"
+            price = candle.close
+        else:
+            return None
+        config = self._strategy.config
+        evaluation = StrategyEvaluation(
+            strategy_name=config.name,
+            strategy_version=config.version,
+            enabled=True,
+            signal=Signal(
+                source=f"{config.name}:paper-protection",
+                pair=candle.pair,
+                generated_at=snapshot.received_at,
+                direction=SignalDirection.SELL,
+                confidence=Decimal("1"),
+                inputs_ref=features.inputs_ref,
+                rationale=reason,
+            ),
+            plan=StrategySignalPlan(
+                entry_reason=reason,
+                timeframe=self._config.timeframe,
+                feature_snapshot_ref=features.inputs_ref,
+            ),
+            reasons=(reason,),
+            generated_at=snapshot.received_at,
+        )
+        return evaluation, price
 
     def _build_feature_snapshot(self, snapshot: PaperMarketSnapshot) -> FeatureSnapshot:
         candles = tuple(self._candles)
@@ -364,8 +522,8 @@ class PaperTradingEngine:
             else Decimal("0")
         )
         avg_volume = (
-            sum((candle.volume for candle in candles[:-1]), Decimal("0"))
-            / Decimal(len(candles[:-1]))
+            sum((candle.volume for candle in previous_window), Decimal("0"))
+            / Decimal(len(previous_window))
             if len(candles) > 1
             else latest.volume
         )
@@ -394,7 +552,13 @@ class PaperTradingEngine:
             "indicator.ema_21": _ema(candles, period=21),
             "indicator.ema_50": _ema(candles, period=50),
             "indicator.rsi.rsi": _rsi(candles, period=14),
-            "indicator.atr.atr_pct": (latest.high - latest.low) / latest.close,
+            "indicator.atr.atr_pct": _atr_pct(candles, snapshot.received_at),
+            "execution.round_trip_cost_pct": (
+                self._config.fill_simulation.fee_bps * 2
+                + self._config.fill_simulation.spread_bps
+                + self._config.fill_simulation.slippage_bps * 2
+            )
+            / Decimal("10000"),
             "data_quality.flag_count": Decimal(len(issues)),
             "liquidity.spread_bps": spread_bps,
             "liquidity.imbalance": snapshot.order_book_metrics.imbalance,
@@ -481,7 +645,16 @@ def _rsi(candles: tuple[Candle, ...], *, period: int) -> Decimal:
     losses = tuple(abs(min(change, Decimal("0"))) for change in changes)
     average_gain = sum(gains, Decimal("0")) / Decimal(len(gains))
     average_loss = sum(losses, Decimal("0")) / Decimal(len(losses))
+    if average_gain == 0 and average_loss == 0:
+        return Decimal("50")
     if average_loss == Decimal("0"):
         return Decimal("100")
     relative_strength = average_gain / average_loss
     return Decimal("100") - (Decimal("100") / (Decimal("1") + relative_strength))
+
+
+def _atr_pct(candles: tuple[Candle, ...], calculated_at: datetime) -> Decimal:
+    if len(candles) < 2:
+        return (candles[-1].high - candles[-1].low) / candles[-1].close
+    result = atr(candles, calculated_at=calculated_at, period=min(14, len(candles) - 1))
+    return result.values["atr"] / candles[-1].close

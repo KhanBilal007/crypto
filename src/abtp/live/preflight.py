@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from abtp.data import normalize_timestamp
@@ -25,6 +25,11 @@ class LivePreflightConfig:
     max_order_notional: Decimal = Decimal("25")
     max_spread_bps: Decimal = Decimal("50")
     max_slippage_bps: Decimal = Decimal("25")
+    max_market_age: timedelta = timedelta(seconds=30)
+    max_account_age: timedelta = timedelta(seconds=30)
+    max_risk_age: timedelta = timedelta(minutes=5)
+    max_intent_age: timedelta = timedelta(minutes=5)
+    max_clock_skew: timedelta = timedelta(seconds=2)
 
     def __post_init__(self) -> None:
         if not Decimal("0") < self.max_risk_per_trade_pct <= Decimal("1"):
@@ -35,6 +40,16 @@ class LivePreflightConfig:
             raise ValueError("max_order_notional must be positive")
         if self.max_spread_bps < Decimal("0") or self.max_slippage_bps < Decimal("0"):
             raise ValueError("spread/slippage limits cannot be negative")
+        for age in (
+            self.max_market_age,
+            self.max_account_age,
+            self.max_risk_age,
+            self.max_intent_age,
+        ):
+            if age <= timedelta(0):
+                raise ValueError("freshness limits must be positive")
+        if self.max_clock_skew < timedelta(0):
+            raise ValueError("max_clock_skew cannot be negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,9 +65,11 @@ class LiveMarketPreflight:
     open_live_positions: int
     permissions: ExchangeKeyPermissions
     checked_at: datetime
+    account_checked_at: datetime
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "checked_at", normalize_timestamp(self.checked_at))
+        object.__setattr__(self, "account_checked_at", normalize_timestamp(self.account_checked_at))
         if self.price <= Decimal("0"):
             raise ValueError("price must be positive")
         if self.quote_balance_available < Decimal("0"):
@@ -101,10 +118,12 @@ def run_live_preflight(
     market: LiveMarketPreflight,
     *,
     config: LivePreflightConfig | None = None,
+    now: datetime | None = None,
 ) -> LivePreflightResult:
     """Validate tiny supervised live order assumptions before submission."""
 
     active_config = config or LivePreflightConfig()
+    checked_now = normalize_timestamp(now if now is not None else datetime.now(UTC))
     estimated_notional = intent.quantity * market.price
     estimated_fee = estimated_notional * market.fee_bps / Decimal("10000")
     max_risk_notional = min(
@@ -124,6 +143,21 @@ def run_live_preflight(
         checked_at=market.checked_at,
     )
     reasons: list[str] = []
+    timestamps = [
+        ("market snapshot", market.checked_at, active_config.max_market_age),
+        ("account snapshot", market.account_checked_at, active_config.max_account_age),
+        ("order intent", intent.created_at, active_config.max_intent_age),
+    ]
+    if intent.risk_decision is not None:
+        timestamps.append(
+            ("risk decision", intent.risk_decision.evaluated_at, active_config.max_risk_age)
+        )
+    for label, timestamp, max_age in timestamps:
+        age = checked_now - normalize_timestamp(timestamp)
+        if age > max_age:
+            reasons.append(f"{label} is stale")
+        if age < -active_config.max_clock_skew:
+            reasons.append(f"{label} timestamp is in the future")
     try:
         assert_order_intent_has_approved_risk(intent)
     except ValueError as exc:

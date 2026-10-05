@@ -97,7 +97,7 @@ def test_risk_rejection_flow_blocks_live_preflight_without_adapter_submission() 
         ),
     )
 
-    result = run_live_preflight(unsafe_intent, _live_market())
+    result = run_live_preflight(unsafe_intent, _live_market(), now=NOW)
 
     assert not result.allowed
     assert "order intent cannot bypass risk decision" in result.reasons
@@ -186,6 +186,7 @@ def _live_market() -> LiveMarketPreflight:
             ip_allowlist=("203.0.113.10",),
         ),
         checked_at=NOW,
+        account_checked_at=NOW,
     )
 
 

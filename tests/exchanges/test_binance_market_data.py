@@ -116,3 +116,17 @@ def test_binance_spot_adapter_is_read_only() -> None:
 
     with pytest.raises(UnsupportedOperationError, match="market-data-only"):
         adapter.submit_order(None)  # type: ignore[arg-type]
+
+
+def test_latest_tape_does_not_request_an_old_time_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = BinanceSpotMarketDataAdapter()
+
+    def latest(path: str, params: dict[str, str]) -> list[dict[str, object]]:
+        assert path == "/api/v3/aggTrades"
+        assert params == {"symbol": "BTCUSDT", "limit": "20"}
+        return [{"a": 12, "p": "64784.78", "q": "0.020", "T": 1785463199500, "m": True}]
+
+    monkeypatch.setattr(adapter, "_get_json_array", latest)
+    trades = adapter.recent_trades(AssetPair(Asset("BTC"), Asset("USDT")))
+    assert len(trades) == 1
+    assert trades[0].trade_id == "12"

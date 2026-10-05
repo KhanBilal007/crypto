@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 from collections.abc import Mapping
 from http import HTTPStatus
@@ -19,27 +20,105 @@ from abtp.dashboard.paper_app import (
     dispatch_dashboard_action,
 )
 from abtp.domain.models import JsonValue
+from abtp.security.dashboard_http import DashboardHTTPPolicy, require_loopback_bind
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 
 
+class PaperDashboardHTTPServer(ThreadingHTTPServer):
+    """Advance paper accounts from the server loop, even with no browser open."""
+
+    def __init__(
+        self,
+        address: tuple[str, int],
+        controller: PaperDashboardController,
+        *,
+        policy: DashboardHTTPPolicy | None = None,
+    ) -> None:
+        require_loopback_bind(address[0])
+        self.controller = controller
+        security = policy or DashboardHTTPPolicy.from_environment(os.environ)
+        super().__init__(address, make_handler(controller, policy=security))
+
+    def service_actions(self) -> None:
+        super().service_actions()
+        try:
+            with self.controller.lock:
+                self.controller.refresh_market_data_if_due()
+        except Exception as exc:
+            self.controller.last_market_error = f"paper worker failed: {type(exc).__name__}"
+            logging.getLogger(__name__).exception("Paper market refresh failed")
+
+
 def make_handler(
     controller: PaperDashboardController,
+    *,
+    policy: DashboardHTTPPolicy | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     """Build a request handler bound to one paper-only controller."""
+
+    security = policy or DashboardHTTPPolicy()
 
     class PaperDashboardRequestHandler(BaseHTTPRequestHandler):
         server_version = "ABTPPaperDashboard/0.1"
 
+        def setup(self) -> None:
+            super().setup()
+            self.connection.settimeout(5)
+
+        def _authorized(self) -> bool:
+            if (
+                len(self.headers.get_all("Host", [])) != 1
+                or len(self.headers.get_all("Content-Length", [])) > 1
+            ):
+                self.close_connection = True
+                self._send(DashboardHttpResponse(status=400, body='{"error":"ambiguous headers"}'))
+                return False
+            address = self.server.server_address
+            if not isinstance(address, tuple):
+                return False
+            rejection = security.authorize(
+                self.command,
+                {
+                    name: self.headers[name]
+                    for name in (
+                        "Host",
+                        "Authorization",
+                        "Origin",
+                        "Sec-Fetch-Site",
+                        "Content-Type",
+                        "Transfer-Encoding",
+                        "Content-Length",
+                    )
+                    if name in self.headers
+                },
+                port=int(address[1]),
+            )
+            if rejection is None:
+                return True
+            self.close_connection = True
+            status, message = rejection
+            self._send(DashboardHttpResponse(status=status, body=json.dumps({"error": message})))
+            return False
+
         def do_GET(self) -> None:
-            response = handle_dashboard_request("GET", self.path, b"", controller)
+            if not self._authorized():
+                return
+            with controller.lock:
+                response = handle_dashboard_request("GET", self.path, b"", controller)
             self._send(response)
 
         def do_POST(self) -> None:
+            if not self._authorized():
+                return
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length else b""
-            response = handle_dashboard_request("POST", self.path, body, controller)
+            if len(body) != length:
+                self._send(DashboardHttpResponse(status=400, body='{"error":"incomplete body"}'))
+                return
+            with controller.lock:
+                response = handle_dashboard_request("POST", self.path, body, controller)
             self._send(response)
 
         def log_message(self, _format: str, *_args: object) -> None:
@@ -51,6 +130,12 @@ def make_handler(
             self.send_header("Content-Type", response.content_type)
             self.send_header("Content-Length", str(len(payload)))
             self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
+            self.send_header("Referrer-Policy", "same-origin")
+            if response.status == HTTPStatus.UNAUTHORIZED:
+                self.send_header("WWW-Authenticate", 'Basic realm="ABTP", charset="UTF-8"')
             self.end_headers()
             self.wfile.write(payload)
 
@@ -273,19 +358,23 @@ def run_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
     """Start the local paper dashboard server."""
 
     controller = build_default_paper_dashboard_controller(
+        market_data_source="binance",
         state_path=os.getenv("ABTP_PAPER_STATE_PATH", "docs/paper_dashboard_state.json"),
         db_path=os.getenv("ABTP_PAPER_DB_PATH", "docs/paper_dashboard.sqlite"),
     )
-    server = ThreadingHTTPServer((host, port), make_handler(controller))
+    server = PaperDashboardHTTPServer((host, port), controller)
     print(f"ABTP paper dashboard: http://{host}:{port}")
     print("Press Ctrl+C to stop. Live trading remains disabled.")
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
 
 
 def smoke_test() -> dict[str, JsonValue]:
     """Run a lightweight local dashboard smoke test without binding a socket."""
 
-    controller = build_default_paper_dashboard_controller()
+    controller = build_default_paper_dashboard_controller(market_data_source="demo")
     status = handle_dashboard_request("GET", "/api/status", b"", controller)
     approve = handle_dashboard_request(
         "POST",
@@ -1391,6 +1480,16 @@ DASHBOARD_HTML = """<!doctype html>
       white-space: normal;
       overflow-wrap: anywhere;
       line-height: 1.25;
+    }
+    body.mode-strategy_lab #strategy_lab_compare table {
+      min-width: 1600px;
+      table-layout: auto;
+    }
+    body.mode-strategy_lab #strategy_lab_compare th,
+    body.mode-strategy_lab #strategy_lab_compare td {
+      white-space: nowrap;
+      overflow-wrap: normal;
+      font-variant-numeric: tabular-nums;
     }
     .ticket-grid {
       display: grid;
@@ -3182,8 +3281,8 @@ DASHBOARD_HTML = """<!doctype html>
         <ul id="explanation"></ul>
       </div>
       <div class="ai-meta">
-        <span>Model: GPT-4o</span>
-        <b>Verified</b>
+        <span>AI model: not configured</span>
+        <b>Rule-based</b>
         <span id="explanation_confidence">Explanation Confidence: not_available</span>
       </div>
     </section>
@@ -3701,7 +3800,10 @@ DASHBOARD_HTML = """<!doctype html>
       fields.stripVersion.textContent = app.version || "not_available";
       fields.stripUpdated.textContent = formatClock(market.updated_at);
       fields.footerDataStatus.textContent =
+        market.strategy_data_status === "stale" ? "Strategy data stale" :
         (market.data_freshness || "unknown").replaceAll("_", " ");
+      fields.footerDataStatus.title = market.strategy_data_error ||
+        `Last strategy candle: ${market.last_strategy_candle || "not available"}`;
       fields.footerExchangeStatus.textContent = market.exchange_connection || "not_configured";
       fields.footerRiskStatus.textContent =
         data.safe_mode && !data.live_trading_enabled ? "Safe Mode" : "Review";
@@ -4385,8 +4487,10 @@ DASHBOARD_HTML = """<!doctype html>
         <table>
           <thead>
             <tr>
-              <th>Run</th><th>Strategy</th><th>Mode</th><th>Sample</th>
-              <th>Paper P/L</th><th>Equity</th><th>Win Rate</th><th>Trades</th>
+              <th>Run</th><th>Strategy</th><th>Mode</th><th>Session Bars</th>
+              <th>Paper P/L (USDT)</th><th>Equity (USDT)</th>
+              <th title="Completed positions after entry and exit fees">Win Rate</th>
+              <th>Closed Trades</th><th>Fills</th><th>Average Trade (USDT)</th>
               <th>Latest Signal</th><th>Risk Score</th><th>Max Drawdown</th><th>Status</th>
             </tr>
           </thead>
@@ -4394,20 +4498,28 @@ DASHBOARD_HTML = """<!doctype html>
             ${items.map((item) => `
               <tr>
                 <td>${item.run_id}${item.selected ? " *" : ""}</td>
-                <td>${item.strategy}</td>
+                <td>${item.strategy}<br><small>${item.strategy_version || ""}</small></td>
                 <td>${item.mode}</td>
                 <td>${item.sample_size || "not_available"}</td>
-                <td>${item.paper_pnl || "not_available"}</td>
-                <td>${item.current_equity || "not_available"}</td>
-                <td>${item.win_rate || "not_available"}</td>
+                <td>${formatTradeMetric(item.paper_pnl)}</td>
+                <td>${formatTradeMetric(item.current_equity)}</td>
+                <td>${formatTradeMetric(item.win_rate, true)}</td>
+                <td>${item.closed_trade_count || "N/A"}</td>
                 <td>${item.trade_count || "not_available"}</td>
-                <td>${item.latest_signal || "not_available"}</td>
-                <td>${item.risk_score || "not_available"}</td>
-                <td>${item.max_drawdown || "not_available"}</td>
+                <td>${formatTradeMetric(item.expectancy)}</td>
+                <td>${item.latest_signal === "not_available" ? "N/A" : item.latest_signal}</td>
+                <td>${formatTradeMetric(item.risk_score)}</td>
+                <td>${formatTradeMetric(item.max_drawdown, true)}</td>
                 <td>${item.status}</td>
               </tr>`).join("")}
           </tbody>
         </table>`;
+    }
+    function formatTradeMetric(value, percentage = false) {
+      if (value === null || value === undefined || value === "not_available") return "N/A";
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) return "N/A";
+      return percentage ? (numeric * 100).toFixed(1) + "%" : numeric.toFixed(2);
     }
     function renderChartControls(chart) {
       const timeframes = chart.available_timeframes || [chart.timeframe || "1h"];

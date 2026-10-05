@@ -9,10 +9,10 @@ from decimal import Decimal
 
 from abtp.backtesting.metrics import calculate_max_drawdown, calculate_profit_factor
 from abtp.data import DataQualityIssue, DataQualityStatus, DataTrustLevel, normalize_timestamp
-from abtp.domain import OrderSide
 from abtp.domain.models import JsonValue
 from abtp.paper.account import PaperTrade
 from abtp.paper.summary import PaperTradingSessionSummary
+from abtp.paper.trade_metrics import closed_trade_pnls
 
 DECIMAL_ZERO = Decimal("0")
 DECIMAL_ONE = Decimal("1")
@@ -222,7 +222,7 @@ def build_paper_evaluation_metrics(
     """Build deterministic metrics from paper sessions and completed trades."""
 
     sessions = tuple(sorted(evaluation_input.sessions, key=lambda item: item.started_at))
-    trade_results = _closed_trade_results(tuple(evaluation_input.completed_trades))
+    trade_results = closed_trade_pnls(evaluation_input.completed_trades)
     cycle_count = sum(session.cycle_count for session in sessions)
     blocked = sum(session.blocked_count for session in sessions)
     total_fees = sum((trade.fee_paid for trade in evaluation_input.completed_trades), DECIMAL_ZERO)
@@ -304,28 +304,6 @@ def paper_evaluation_quality(
         source_ref="paper_evaluation:gate",
         checked_at=evaluation_input.generated_at,
     )
-
-
-def _closed_trade_results(trades: tuple[PaperTrade, ...]) -> tuple[Decimal, ...]:
-    lots: list[tuple[Decimal, Decimal]] = []
-    results: list[Decimal] = []
-    for trade in sorted(trades, key=lambda item: item.occurred_at):
-        if trade.side is OrderSide.BUY:
-            lots.append((trade.quantity, trade.price))
-            continue
-        remaining = trade.quantity
-        realized = -trade.fee_paid
-        while remaining > DECIMAL_ZERO and lots:
-            lot_qty, lot_price = lots.pop(0)
-            matched = min(remaining, lot_qty)
-            realized += (trade.price - lot_price) * matched
-            remaining -= matched
-            leftover = lot_qty - matched
-            if leftover > DECIMAL_ZERO:
-                lots.insert(0, (leftover, lot_price))
-        if realized != -trade.fee_paid or trade.quantity > remaining:
-            results.append(realized)
-    return tuple(results)
 
 
 def _equity_curve(sessions: tuple[PaperTradingSessionSummary, ...]) -> tuple[Decimal, ...]:

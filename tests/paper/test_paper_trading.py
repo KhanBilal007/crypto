@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -87,8 +88,12 @@ def test_drawdown_halt_blocks_later_paper_entries() -> None:
         engine.on_market_update(_snapshot(index, close))
     halted = engine.on_market_update(_snapshot(4, "70"))
 
-    assert halted.skipped_reason == "paper drawdown halt active"
-    assert halted.execution_result is None
+    assert halted.executed
+    assert engine.account.state.base_quantity == 0
+    assert engine.state(mark_price=Decimal("70")).halted
+    later = engine.on_market_update(_snapshot(5, "104"))
+    assert later.skipped_reason == "paper risk halt active"
+    assert later.execution_result is None
 
 
 def test_direct_order_submission_is_blocked() -> None:
@@ -131,6 +136,71 @@ def test_paper_fill_estimate_includes_spread_slippage_and_latency() -> None:
 
     assert estimate.execution_price == Decimal("100.100")
     assert estimate.latency_ms == 42
+
+
+def test_protection_uses_stop_first_and_adverse_gap_even_when_strategy_would_hold() -> None:
+    engine = PaperTradingEngine(
+        strategy=_SellAfterEntryStrategy(), config=PaperTradingConfig(timeframe="1h")
+    )
+    engine.on_market_update(_snapshot(0, "100"))
+    engine.restore_runtime_state(
+        stop_loss=Decimal("99"),
+        take_profit=Decimal("105"),
+        last_processed_at=engine.last_processed_at,
+    )
+    snapshot = _snapshot(1, "102")
+    candle = replace(snapshot.candle, open=Decimal("97"), low=Decimal("96"), high=Decimal("106"))
+    result = engine.on_market_update(replace(snapshot, candle=candle))
+    assert result.executed
+    assert result.strategy_evaluation is not None
+    assert result.strategy_evaluation.reasons == ("protective stop-loss triggered",)
+    assert engine.account.trades[-1].price < Decimal("97")
+    assert engine.account.state.base_quantity == 0
+    assert engine.runtime_state()["stop_loss"] is None
+
+
+def test_take_profit_closes_all_and_warmup_never_fills() -> None:
+    engine = PaperTradingEngine(
+        strategy=_SellAfterEntryStrategy(), config=PaperTradingConfig(timeframe="1h")
+    )
+    engine.on_market_update(_snapshot(0, "100"), execute=False)
+    assert not engine.account.trades
+    engine.on_market_update(_snapshot(1, "100"))
+    engine.restore_runtime_state(
+        stop_loss=Decimal("95"),
+        take_profit=Decimal("105"),
+        last_processed_at=engine.last_processed_at,
+    )
+    result = engine.on_market_update(_snapshot(2, "110"))
+    assert result.executed
+    assert result.strategy_evaluation is not None
+    assert result.strategy_evaluation.reasons == ("protective take-profit triggered",)
+    assert engine.account.trades[-1].price < Decimal("105")
+    assert engine.account.state.base_quantity == 0
+
+
+def test_same_candle_cannot_execute_twice_and_unclosed_candle_is_rejected() -> None:
+    engine = PaperTradingEngine(
+        strategy=_SellAfterEntryStrategy(), config=PaperTradingConfig(timeframe="1h")
+    )
+    snapshot = _snapshot(0, "100")
+    first = engine.on_market_update(snapshot)
+    assert engine.on_market_update(snapshot) is first
+    assert len(engine.account.trades) == 1
+    future = _snapshot(1, "101")
+    with pytest.raises(ValueError, match="unfinished"):
+        engine.on_market_update(replace(future, received_at=future.candle.opened_at))
+
+
+def test_atr_accounts_for_price_gaps_and_flat_rsi_is_neutral() -> None:
+    engine = PaperTradingEngine(
+        strategy=_SellAfterEntryStrategy(), config=PaperTradingConfig(timeframe="1h")
+    )
+    for index in range(15):
+        result = engine.on_market_update(_snapshot(index, "100"), execute=False)
+    assert result.features.values["indicator.rsi.rsi"] == Decimal("50")
+    result = engine.on_market_update(_snapshot(15, "120"), execute=False)
+    assert result.features.values["indicator.atr.atr_pct"] > Decimal("0.01")
 
 
 class _SellAfterEntryStrategy:

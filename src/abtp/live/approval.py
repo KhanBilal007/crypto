@@ -107,8 +107,12 @@ def validate_live_approval(
         reasons.append("approval token does not match order intent")
     if token.confirmation_phrase != active_policy.confirmation_phrase:
         reasons.append("approval confirmation phrase is invalid")
-    if normalized_now > token.expires_at:
+    if normalized_now < token.approved_at:
+        reasons.append("approval token is not yet valid")
+    if normalized_now >= token.expires_at:
         reasons.append("approval token is expired")
+    if token.expires_at - token.approved_at > active_policy.ttl:
+        reasons.append("approval lifetime exceeds policy limit")
     if intent.quantity > token.max_quantity:
         reasons.append("order quantity exceeds approved maximum")
     if estimated_notional > token.max_notional:

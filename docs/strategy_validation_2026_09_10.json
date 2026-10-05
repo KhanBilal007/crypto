@@ -1,0 +1,1710 @@
+{
+  "created_at": "2026-09-09T21:22:27.590265+00:00",
+  "data_sha256": "3cda7083a2083d1f09b1ba0ba3f84360131af4ae95027fc064b67fe08ef2b94c",
+  "data_source": "Binance public spot klines",
+  "retrieved_at": "2026-09-09T21:16:35.187903+00:00",
+  "baseline_ref": "60db1c1",
+  "assumptions": {
+    "initial_cash_usdt": "10000",
+    "max_btc_per_entry": "0.01",
+    "fee_bps_each_side": "20",
+    "spread_bps": "10",
+    "max_risk_per_trade_pct": "0.25",
+    "entry_and_signal_exit": "next candle open with spread/slippage",
+    "protective_exits": "bar high/low, stop first on ambiguity, adverse gap price",
+    "daily_confirmation": "only daily candles closed by signal time",
+    "legacy_comparison": "old strategy rules on the same corrected execution/indicator pipeline",
+    "parameter_search": "none; rule changes specified before viewing results",
+    "limitations": "No historical order book or tick fills; small samples are not proof of an edge. Last 30 days are a chronological check, not a pristine unseen holdout after this audit."
+  },
+  "results": [
+    {
+      "group": "candidate",
+      "window": "first_period",
+      "slippage_bps": "5",
+      "strategy": "min_risk_spot_v1",
+      "version": "stage-021.v1",
+      "start": "2026-06-11T20:00:00+00:00",
+      "end_exclusive": "2026-08-10T20:00:00+00:00",
+      "observed_test_bars": 1440,
+      "signals": {
+        "hold": 1436,
+        "buy": 2,
+        "sell": 2
+      },
+      "paper_pnl_usdt": "3.55601332508571428571428",
+      "return_pct": "0.0355601332508571428571428",
+      "max_drawdown_pct": "0.2597584852422404010224660617",
+      "fees_usdt": "5.090059846342857142857142857",
+      "open_btc": "0.00",
+      "buy_hold_gross_pct": "1.028541177691715907913203300",
+      "top_reasons": [
+        [
+          "trend confirmation is below threshold",
+          1365
+        ],
+        [
+          "regime is not acceptable for new long entries",
+          965
+        ],
+        [
+          "RSI momentum filter is not in conservative range",
+          933
+        ],
+        [
+          "volume confirmation is below threshold",
+          820
+        ],
+        [
+          "BTC spot trend, momentum, volume, spread, regime, and optional AI checks passed",
+          4
+        ],
+        [
+          "1d trend blocks paper buy: close=59794.00000000, sma=61906.64250000, return_3d=-0.0660107675709516446498524446",
+          1
+        ],
+        [
+          "1d trend blocks paper buy: close=59577.01000000, sma=59874.32000000, return_3d=-0.0036289594273672943773622772",
+          1
+        ],
+        [
+          "1d trend confirms paper buy: close=60024.00000000, sma=59621.48250000, return_3d=0.007502726303317336670638557",
+          1
+        ]
+      ],
+      "closed_trade_count": "2",
+      "fill_count": "4",
+      "win_rate": "0.5",
+      "expectancy": "1.77800666254285714285714285",
+      "profit_factor": "1.242213378310975548082781741",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "candidate",
+      "window": "first_period",
+      "slippage_bps": "5",
+      "strategy": "trend_pullback_v1",
+      "version": "stage-073.v2",
+      "start": "2026-06-11T20:00:00+00:00",
+      "end_exclusive": "2026-08-10T20:00:00+00:00",
+      "observed_test_bars": 1440,
+      "signals": {
+        "hold": 1428,
+        "buy": 6,
+        "sell": 6
+      },
+      "paper_pnl_usdt": "-14.49452955120000000000000",
+      "return_pct": "-0.14494529551200000000000",
+      "max_drawdown_pct": "0.1905373294745753017552274980",
+      "fees_usdt": "15.27928075120000000000000000",
+      "open_btc": "0.00",
+      "buy_hold_gross_pct": "1.028541177691715907913203300",
+      "top_reasons": [
+        [
+          "volume confirmation is below threshold",
+          905
+        ],
+        [
+          "EMA trend stack is not bullish",
+          256
+        ],
+        [
+          "pullback is not in the planned swing-entry zone",
+          172
+        ],
+        [
+          "manage existing position; no repeated entry",
+          37
+        ],
+        [
+          "RSI is not in pullback recovery range",
+          22
+        ],
+        [
+          "pullback recovery has not closed higher yet",
+          21
+        ],
+        [
+          "uptrend pullback, RSI recovery, volume, spread, and risk inputs passed",
+          14
+        ],
+        [
+          "downtrend regime blocks long swing entries",
+          9
+        ]
+      ],
+      "closed_trade_count": "6",
+      "fill_count": "12",
+      "win_rate": "0.3333333333333333333333333333",
+      "expectancy": "-2.4157549252000000000000000",
+      "profit_factor": "0.4745367048230265331715674844",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "candidate",
+      "window": "first_period",
+      "slippage_bps": "5",
+      "strategy": "breakout_v1",
+      "version": "stage-073.v2",
+      "start": "2026-06-11T20:00:00+00:00",
+      "end_exclusive": "2026-08-10T20:00:00+00:00",
+      "observed_test_bars": 1440,
+      "signals": {
+        "hold": 1424,
+        "buy": 8,
+        "sell": 8
+      },
+      "paper_pnl_usdt": "-24.285742302600000000000000",
+      "return_pct": "-0.242857423026000000000000",
+      "max_drawdown_pct": "0.3187876520378580330563864349",
+      "fees_usdt": "20.72295700260000000000000000",
+      "open_btc": "0.00",
+      "buy_hold_gross_pct": "1.028541177691715907913203300",
+      "top_reasons": [
+        [
+          "volume confirmation is below threshold",
+          969
+        ],
+        [
+          "price has not broken resistance with confirmation",
+          304
+        ],
+        [
+          "manage existing position; no repeated entry",
+          132
+        ],
+        [
+          "resistance breakout with volume, spread, and risk inputs passed",
+          19
+        ],
+        [
+          "downtrend regime blocks long swing entries",
+          9
+        ],
+        [
+          "protective stop-loss triggered",
+          4
+        ],
+        [
+          "1d trend blocks paper buy: close=63311.99000000, sma=63527.98000000, return_3d=0.005622477584663174709619951",
+          3
+        ],
+        [
+          "1d trend blocks paper buy: close=62334.52000000, sma=63523.81000000, return_3d=-0.0284780395538024853448442467",
+          3
+        ]
+      ],
+      "closed_trade_count": "8",
+      "fill_count": "16",
+      "win_rate": "0.375",
+      "expectancy": "-3.035717787824999999999999975",
+      "profit_factor": "0.5248421931924493198127582517",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "candidate",
+      "window": "first_period",
+      "slippage_bps": "5",
+      "strategy": "support_resistance_rebound_v1",
+      "version": "stage-073.v2",
+      "start": "2026-06-11T20:00:00+00:00",
+      "end_exclusive": "2026-08-10T20:00:00+00:00",
+      "observed_test_bars": 1440,
+      "signals": {
+        "hold": 1440
+      },
+      "paper_pnl_usdt": "0E-8",
+      "return_pct": "0E-8",
+      "max_drawdown_pct": "0",
+      "fees_usdt": "0",
+      "open_btc": "0",
+      "buy_hold_gross_pct": "1.028541177691715907913203300",
+      "top_reasons": [
+        [
+          "volume confirmation is below threshold",
+          762
+        ],
+        [
+          "support must hold and rebound before entry, with room to resistance",
+          605
+        ],
+        [
+          "RSI is not in support rebound range",
+          36
+        ],
+        [
+          "available reward is too small for risk and trading costs",
+          18
+        ],
+        [
+          "price is not close enough to support",
+          12
+        ],
+        [
+          "downtrend regime blocks long swing entries",
+          9
+        ]
+      ],
+      "closed_trade_count": "0",
+      "fill_count": "0",
+      "win_rate": "not_available",
+      "expectancy": "not_available",
+      "profit_factor": "not_available",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "candidate",
+      "window": "first_period",
+      "slippage_bps": "10",
+      "strategy": "min_risk_spot_v1",
+      "version": "stage-021.v1",
+      "start": "2026-06-11T20:00:00+00:00",
+      "end_exclusive": "2026-08-10T20:00:00+00:00",
+      "observed_test_bars": 1440,
+      "signals": {
+        "hold": 1436,
+        "buy": 2,
+        "sell": 2
+      },
+      "paper_pnl_usdt": "2.28350395905714285714286",
+      "return_pct": "0.0228350395905714285714286",
+      "max_drawdown_pct": "0.2629889966869566495469172527",
+      "fees_usdt": "5.090048655228571428571428572",
+      "open_btc": "0.00",
+      "buy_hold_gross_pct": "1.028541177691715907913203300",
+      "top_reasons": [
+        [
+          "trend confirmation is below threshold",
+          1365
+        ],
+        [
+          "regime is not acceptable for new long entries",
+          965
+        ],
+        [
+          "RSI momentum filter is not in conservative range",
+          933
+        ],
+        [
+          "volume confirmation is below threshold",
+          820
+        ],
+        [
+          "BTC spot trend, momentum, volume, spread, regime, and optional AI checks passed",
+          4
+        ],
+        [
+          "1d trend blocks paper buy: close=59794.00000000, sma=61906.64250000, return_3d=-0.0660107675709516446498524446",
+          1
+        ],
+        [
+          "1d trend blocks paper buy: close=59577.01000000, sma=59874.32000000, return_3d=-0.0036289594273672943773622772",
+          1
+        ],
+        [
+          "1d trend confirms paper buy: close=60024.00000000, sma=59621.48250000, return_3d=0.007502726303317336670638557",
+          1
+        ]
+      ],
+      "closed_trade_count": "2",
+      "fill_count": "4",
+      "win_rate": "0.5",
+      "expectancy": "1.14175197952857142857142855",
+      "profit_factor": "1.148946553312829853659604148",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "candidate",
+      "window": "first_period",
+      "slippage_bps": "10",
+      "strategy": "trend_pullback_v1",
+      "version": "stage-073.v2",
+      "start": "2026-06-11T20:00:00+00:00",
+      "end_exclusive": "2026-08-10T20:00:00+00:00",
+      "observed_test_bars": 1440,
+      "signals": {
+        "hold": 1428,
+        "buy": 6,
+        "sell": 6
+      },
+      "paper_pnl_usdt": "-18.31434552680000000000000",
+      "return_pct": "-0.18314345526800000000000",
+      "max_drawdown_pct": "0.2065629007116892860902797478",
+      "fees_usdt": "15.27927232680000000000000000",
+      "open_btc": "0.00",
+      "buy_hold_gross_pct": "1.028541177691715907913203300",
+      "top_reasons": [
+        [
+          "volume confirmation is below threshold",
+          905
+        ],
+        [
+          "EMA trend stack is not bullish",
+          256
+        ],
+        [
+          "pullback is not in the planned swing-entry zone",
+          172
+        ],
+        [
+          "manage existing position; no repeated entry",
+          37
+        ],
+        [
+          "RSI is not in pullback recovery range",
+          22
+        ],
+        [
+          "pullback recovery has not closed higher yet",
+          21
+        ],
+        [
+          "uptrend pullback, RSI recovery, volume, spread, and risk inputs passed",
+          13
+        ],
+        [
+          "downtrend regime blocks long swing entries",
+          9
+        ]
+      ],
+      "closed_trade_count": "6",
+      "fill_count": "12",
+      "win_rate": "0.3333333333333333333333333333",
+      "expectancy": "-3.052390921133333333333333333",
+      "profit_factor": "0.3923663764697027365670594270",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "candidate",
+      "window": "first_period",
+      "slippage_bps": "10",
+      "strategy": "breakout_v1",
+      "version": "stage-073.v2",
+      "start": "2026-06-11T20:00:00+00:00",
+      "end_exclusive": "2026-08-10T20:00:00+00:00",
+      "observed_test_bars": 1440,
+      "signals": {
+        "hold": 1426,
+        "buy": 7,
+        "sell": 7
+      },
+      "paper_pnl_usdt": "-23.523523548900000000000001",
+      "return_pct": "-0.23523523548900000000000001",
+      "max_drawdown_pct": "0.3468565761275671737878881825",
+      "fees_usdt": "18.14697429890000000000000000",
+      "open_btc": "0.00",
+      "buy_hold_gross_pct": "1.028541177691715907913203300",
+      "top_reasons": [
+        [
+          "volume confirmation is below threshold",
+          980
+        ],
+        [
+          "price has not broken resistance with confirmation",
+          308
+        ],
+        [
+          "manage existing position; no repeated entry",
+          118
+        ],
+        [
+          "resistance breakout with volume, spread, and risk inputs passed",
+          17
+        ],
+        [
+          "downtrend regime blocks long swing entries",
+          9
+        ],
+        [
+          "available reward is too small for risk and trading costs",
+          5
+        ],
+        [
+          "protective stop-loss triggered",
+          4
+        ],
+        [
+          "1d trend blocks paper buy: close=63311.99000000, sma=63527.98000000, return_3d=0.005622477584663174709619951",
+          3
+        ]
+      ],
+      "closed_trade_count": "7",
+      "fill_count": "14",
+      "win_rate": "0.4285714285714285714285714286",
+      "expectancy": "-3.360503364128571428571428543",
+      "profit_factor": "0.5140264418108408967191138136",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "candidate",
+      "window": "first_period",
+      "slippage_bps": "10",
+      "strategy": "support_resistance_rebound_v1",
+      "version": "stage-073.v2",
+      "start": "2026-06-11T20:00:00+00:00",
+      "end_exclusive": "2026-08-10T20:00:00+00:00",
+      "observed_test_bars": 1440,
+      "signals": {
+        "hold": 1440
+      },
+      "paper_pnl_usdt": "0E-8",
+      "return_pct": "0E-8",
+      "max_drawdown_pct": "0",
+      "fees_usdt": "0",
+      "open_btc": "0",
+      "buy_hold_gross_pct": "1.028541177691715907913203300",
+      "top_reasons": [
+        [
+          "volume confirmation is below threshold",
+          762
+        ],
+        [
+          "support must hold and rebound before entry, with room to resistance",
+          605
+        ],
+        [
+          "RSI is not in support rebound range",
+          36
+        ],
+        [
+          "available reward is too small for risk and trading costs",
+          18
+        ],
+        [
+          "price is not close enough to support",
+          12
+        ],
+        [
+          "downtrend regime blocks long swing entries",
+          9
+        ]
+      ],
+      "closed_trade_count": "0",
+      "fill_count": "0",
+      "win_rate": "not_available",
+      "expectancy": "not_available",
+      "profit_factor": "not_available",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "candidate",
+      "window": "last_30_days",
+      "slippage_bps": "5",
+      "strategy": "min_risk_spot_v1",
+      "version": "stage-021.v1",
+      "start": "2026-08-10T20:00:00+00:00",
+      "end_exclusive": "2026-09-09T20:00:00+00:00",
+      "observed_test_bars": 720,
+      "signals": {
+        "hold": 718,
+        "buy": 1,
+        "sell": 1
+      },
+      "paper_pnl_usdt": "19.01131794994285714285714",
+      "return_pct": "0.1901131794994285714285714",
+      "max_drawdown_pct": "0.07702792954217710470698040349",
+      "fees_usdt": "3.185276935771428571428571429",
+      "open_btc": "0.00",
+      "buy_hold_gross_pct": "21.94012047353358846194790430",
+      "top_reasons": [
+        [
+          "trend confirmation is below threshold",
+          676
+        ],
+        [
+          "RSI momentum filter is not in conservative range",
+          497
+        ],
+        [
+          "regime is not acceptable for new long entries",
+          449
+        ],
+        [
+          "volume confirmation is below threshold",
+          415
+        ],
+        [
+          "BTC spot trend, momentum, volume, spread, regime, and optional AI checks passed",
+          1
+        ],
+        [
+          "1d trend confirms paper buy: close=77734.00000000, sma=76543.02750000, return_3d=0.064482578947116164773369175",
+          1
+        ],
+        [
+          "protective take-profit triggered",
+          1
+        ]
+      ],
+      "closed_trade_count": "1",
+      "fill_count": "2",
+      "win_rate": "1",
+      "expectancy": "19.0113179499428571428571429",
+      "profit_factor": "not_available",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "candidate",
+      "window": "last_30_days",
+      "slippage_bps": "5",
+      "strategy": "trend_pullback_v1",
+      "version": "stage-073.v2",
+      "start": "2026-08-10T20:00:00+00:00",
+      "end_exclusive": "2026-09-09T20:00:00+00:00",
+      "observed_test_bars": 720,
+      "signals": {
+        "hold": 712,
+        "buy": 4,
+        "sell": 4
+      },
+      "paper_pnl_usdt": "-22.0443926712000",
+      "return_pct": "-0.2204439267120",
+      "max_drawdown_pct": "0.2693250767283470482655113874",
+      "fees_usdt": "11.9391978712000",
+      "open_btc": "0.00",
+      "buy_hold_gross_pct": "21.94012047353358846194790430",
+      "top_reasons": [
+        [
+          "volume confirmation is below threshold",
+          442
+        ],
+        [
+          "EMA trend stack is not bullish",
+          129
+        ],
+        [
+          "pullback is not in the planned swing-entry zone",
+          82
+        ],
+        [
+          "manage existing position; no repeated entry",
+          33
+        ],
+        [
+          "RSI is not in pullback recovery range",
+          19
+        ],
+        [
+          "uptrend pullback, RSI recovery, volume, spread, and risk inputs passed",
+          6
+        ],
+        [
+          "trend confirmation broke below EMA 21",
+          4
+        ],
+        [
+          "pullback recovery has not closed higher yet",
+          4
+        ]
+      ],
+      "closed_trade_count": "4",
+      "fill_count": "8",
+      "win_rate": "0",
+      "expectancy": "-5.5110981678000",
+      "profit_factor": "0E+13",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "candidate",
+      "window": "last_30_days",
+      "slippage_bps": "5",
+      "strategy": "breakout_v1",
+      "version": "stage-073.v2",
+      "start": "2026-08-10T20:00:00+00:00",
+      "end_exclusive": "2026-09-09T20:00:00+00:00",
+      "observed_test_bars": 720,
+      "signals": {
+        "hold": 706,
+        "buy": 7,
+        "sell": 7
+      },
+      "paper_pnl_usdt": "27.31248648385714285714285",
+      "return_pct": "0.2731248648385714285714285",
+      "max_drawdown_pct": "0.2584123293617594563443799696",
+      "fees_usdt": "20.57673213042857142857142858",
+      "open_btc": "0.00",
+      "buy_hold_gross_pct": "21.94012047353358846194790430",
+      "top_reasons": [
+        [
+          "volume confirmation is below threshold",
+          485
+        ],
+        [
+          "price has not broken resistance with confirmation",
+          157
+        ],
+        [
+          "manage existing position; no repeated entry",
+          50
+        ],
+        [
+          "resistance breakout with volume, spread, and risk inputs passed",
+          17
+        ],
+        [
+          "protective take-profit triggered",
+          4
+        ],
+        [
+          "1d trend blocks paper buy: close=77340.01000000, sma=77760.57500000, return_3d=-0.0044024355706598697252902860",
+          4
+        ],
+        [
+          "available reward is too small for risk and trading costs",
+          3
+        ],
+        [
+          "1d trend blocks paper buy: close=62900.00000000, sma=63130.10750000, return_3d=-0.0093062213994266261316983263",
+          3
+        ]
+      ],
+      "closed_trade_count": "7",
+      "fill_count": "14",
+      "win_rate": "0.5714285714285714285714285714",
+      "expectancy": "3.901783783408163265306122486",
+      "profit_factor": "1.642749260930182712472863111",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "candidate",
+      "window": "last_30_days",
+      "slippage_bps": "5",
+      "strategy": "support_resistance_rebound_v1",
+      "version": "stage-073.v2",
+      "start": "2026-08-10T20:00:00+00:00",
+      "end_exclusive": "2026-09-09T20:00:00+00:00",
+      "observed_test_bars": 720,
+      "signals": {
+        "hold": 720
+      },
+      "paper_pnl_usdt": "0E-8",
+      "return_pct": "0E-8",
+      "max_drawdown_pct": "0",
+      "fees_usdt": "0",
+      "open_btc": "0",
+      "buy_hold_gross_pct": "21.94012047353358846194790430",
+      "top_reasons": [
+        [
+          "volume confirmation is below threshold",
+          386
+        ],
+        [
+          "support must hold and rebound before entry, with room to resistance",
+          307
+        ],
+        [
+          "available reward is too small for risk and trading costs",
+          12
+        ],
+        [
+          "RSI is not in support rebound range",
+          10
+        ],
+        [
+          "price is not close enough to support",
+          4
+        ],
+        [
+          "downtrend regime blocks long swing entries",
+          2
+        ]
+      ],
+      "closed_trade_count": "0",
+      "fill_count": "0",
+      "win_rate": "not_available",
+      "expectancy": "not_available",
+      "profit_factor": "not_available",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "candidate",
+      "window": "last_30_days",
+      "slippage_bps": "10",
+      "strategy": "min_risk_spot_v1",
+      "version": "stage-021.v1",
+      "start": "2026-08-10T20:00:00+00:00",
+      "end_exclusive": "2026-09-09T20:00:00+00:00",
+      "observed_test_bars": 720,
+      "signals": {
+        "hold": 718,
+        "buy": 1,
+        "sell": 1
+      },
+      "paper_pnl_usdt": "18.21501061062857142857143",
+      "return_pct": "0.1821501061062857142857143",
+      "max_drawdown_pct": "0.07703095436338562504789150382",
+      "fees_usdt": "3.185253146514285714285714286",
+      "open_btc": "0.00",
+      "buy_hold_gross_pct": "21.94012047353358846194790430",
+      "top_reasons": [
+        [
+          "trend confirmation is below threshold",
+          676
+        ],
+        [
+          "RSI momentum filter is not in conservative range",
+          497
+        ],
+        [
+          "regime is not acceptable for new long entries",
+          449
+        ],
+        [
+          "volume confirmation is below threshold",
+          415
+        ],
+        [
+          "BTC spot trend, momentum, volume, spread, regime, and optional AI checks passed",
+          1
+        ],
+        [
+          "1d trend confirms paper buy: close=77734.00000000, sma=76543.02750000, return_3d=0.064482578947116164773369175",
+          1
+        ],
+        [
+          "protective take-profit triggered",
+          1
+        ]
+      ],
+      "closed_trade_count": "1",
+      "fill_count": "2",
+      "win_rate": "1",
+      "expectancy": "18.2150106106285714285714286",
+      "profit_factor": "not_available",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "candidate",
+      "window": "last_30_days",
+      "slippage_bps": "10",
+      "strategy": "trend_pullback_v1",
+      "version": "stage-073.v2",
+      "start": "2026-08-10T20:00:00+00:00",
+      "end_exclusive": "2026-09-09T20:00:00+00:00",
+      "observed_test_bars": 720,
+      "signals": {
+        "hold": 712,
+        "buy": 4,
+        "sell": 4
+      },
+      "paper_pnl_usdt": "-25.02919420680000",
+      "return_pct": "-0.25029194206800",
+      "max_drawdown_pct": "0.2921494187883203472150303455",
+      "fees_usdt": "11.93920200680000",
+      "open_btc": "0.00",
+      "buy_hold_gross_pct": "21.94012047353358846194790430",
+      "top_reasons": [
+        [
+          "volume confirmation is below threshold",
+          442
+        ],
+        [
+          "EMA trend stack is not bullish",
+          129
+        ],
+        [
+          "pullback is not in the planned swing-entry zone",
+          82
+        ],
+        [
+          "manage existing position; no repeated entry",
+          33
+        ],
+        [
+          "RSI is not in pullback recovery range",
+          19
+        ],
+        [
+          "uptrend pullback, RSI recovery, volume, spread, and risk inputs passed",
+          6
+        ],
+        [
+          "trend confirmation broke below EMA 21",
+          4
+        ],
+        [
+          "pullback recovery has not closed higher yet",
+          4
+        ]
+      ],
+      "closed_trade_count": "4",
+      "fill_count": "8",
+      "win_rate": "0",
+      "expectancy": "-6.25729855170000",
+      "profit_factor": "0E+14",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "candidate",
+      "window": "last_30_days",
+      "slippage_bps": "10",
+      "strategy": "breakout_v1",
+      "version": "stage-073.v2",
+      "start": "2026-08-10T20:00:00+00:00",
+      "end_exclusive": "2026-09-09T20:00:00+00:00",
+      "observed_test_bars": 720,
+      "signals": {
+        "hold": 706,
+        "buy": 7,
+        "sell": 7
+      },
+      "paper_pnl_usdt": "22.16833254007142857142858",
+      "return_pct": "0.2216833254007142857142858",
+      "max_drawdown_pct": "0.2701960849257111380974691502",
+      "fees_usdt": "20.57667395278571428571428572",
+      "open_btc": "0.00",
+      "buy_hold_gross_pct": "21.94012047353358846194790430",
+      "top_reasons": [
+        [
+          "volume confirmation is below threshold",
+          485
+        ],
+        [
+          "price has not broken resistance with confirmation",
+          157
+        ],
+        [
+          "manage existing position; no repeated entry",
+          50
+        ],
+        [
+          "resistance breakout with volume, spread, and risk inputs passed",
+          15
+        ],
+        [
+          "available reward is too small for risk and trading costs",
+          5
+        ],
+        [
+          "protective take-profit triggered",
+          4
+        ],
+        [
+          "1d trend blocks paper buy: close=77340.01000000, sma=77760.57500000, return_3d=-0.0044024355706598697252902860",
+          4
+        ],
+        [
+          "1d trend blocks paper buy: close=62900.00000000, sma=63130.10750000, return_3d=-0.0093062213994266261316983263",
+          3
+        ]
+      ],
+      "closed_trade_count": "7",
+      "fill_count": "14",
+      "win_rate": "0.5714285714285714285714285714",
+      "expectancy": "3.166904648581632653061224529",
+      "profit_factor": "1.495758912456791339970312575",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "candidate",
+      "window": "last_30_days",
+      "slippage_bps": "10",
+      "strategy": "support_resistance_rebound_v1",
+      "version": "stage-073.v2",
+      "start": "2026-08-10T20:00:00+00:00",
+      "end_exclusive": "2026-09-09T20:00:00+00:00",
+      "observed_test_bars": 720,
+      "signals": {
+        "hold": 720
+      },
+      "paper_pnl_usdt": "0E-8",
+      "return_pct": "0E-8",
+      "max_drawdown_pct": "0",
+      "fees_usdt": "0",
+      "open_btc": "0",
+      "buy_hold_gross_pct": "21.94012047353358846194790430",
+      "top_reasons": [
+        [
+          "volume confirmation is below threshold",
+          386
+        ],
+        [
+          "support must hold and rebound before entry, with room to resistance",
+          307
+        ],
+        [
+          "available reward is too small for risk and trading costs",
+          12
+        ],
+        [
+          "RSI is not in support rebound range",
+          10
+        ],
+        [
+          "price is not close enough to support",
+          4
+        ],
+        [
+          "downtrend regime blocks long swing entries",
+          2
+        ]
+      ],
+      "closed_trade_count": "0",
+      "fill_count": "0",
+      "win_rate": "not_available",
+      "expectancy": "not_available",
+      "profit_factor": "not_available",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "legacy_rules_fixed_execution",
+      "window": "first_period",
+      "slippage_bps": "5",
+      "strategy": "trend_pullback_v1",
+      "version": "stage-072.v1",
+      "start": "2026-06-11T20:00:00+00:00",
+      "end_exclusive": "2026-08-10T20:00:00+00:00",
+      "observed_test_bars": 1440,
+      "signals": {
+        "hold": 1409,
+        "buy": 20,
+        "sell": 11
+      },
+      "paper_pnl_usdt": "-35.532679438457142857142853",
+      "return_pct": "-0.35532679438457142857142853",
+      "max_drawdown_pct": "0.4665548994169337485200965251",
+      "fees_usdt": "28.08515332417142857142857143",
+      "open_btc": "0.00",
+      "buy_hold_gross_pct": "1.028541177691715907913203300",
+      "top_reasons": [
+        [
+          "volume confirmation is below threshold",
+          932
+        ],
+        [
+          "EMA trend stack is not bullish",
+          249
+        ],
+        [
+          "pullback is not in the planned swing-entry zone",
+          181
+        ],
+        [
+          "uptrend pullback, RSI recovery, volume, spread, and risk inputs passed",
+          37
+        ],
+        [
+          "RSI is not in pullback recovery range",
+          23
+        ],
+        [
+          "downtrend regime blocks long swing entries",
+          9
+        ],
+        [
+          "trend confirmation broke below EMA 21",
+          6
+        ],
+        [
+          "protective take-profit triggered",
+          3
+        ]
+      ],
+      "closed_trade_count": "11",
+      "fill_count": "22",
+      "win_rate": "0.2727272727272727272727272727",
+      "expectancy": "-3.230243585314285714285714282",
+      "profit_factor": "0.3659362162337210866589921589",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "legacy_rules_fixed_execution",
+      "window": "first_period",
+      "slippage_bps": "5",
+      "strategy": "breakout_v1",
+      "version": "stage-072.v1",
+      "start": "2026-06-11T20:00:00+00:00",
+      "end_exclusive": "2026-08-10T20:00:00+00:00",
+      "observed_test_bars": 1440,
+      "signals": {
+        "hold": 1415,
+        "buy": 17,
+        "sell": 8
+      },
+      "paper_pnl_usdt": "-37.582729490828571428571430",
+      "return_pct": "-0.3758272949082857142857143",
+      "max_drawdown_pct": "0.4220331676959897962404488195",
+      "fees_usdt": "20.69630973368571428571428572",
+      "open_btc": "0.00",
+      "buy_hold_gross_pct": "1.028541177691715907913203300",
+      "top_reasons": [
+        [
+          "volume confirmation is below threshold",
+          1070
+        ],
+        [
+          "price has not broken resistance with confirmation",
+          326
+        ],
+        [
+          "resistance breakout with volume, spread, and risk inputs passed",
+          31
+        ],
+        [
+          "downtrend regime blocks long swing entries",
+          9
+        ],
+        [
+          "protective stop-loss triggered",
+          5
+        ],
+        [
+          "1d trend confirms paper buy: close=65746.45000000, sma=64352.61500000, return_3d=0.033326947054183361233357626",
+          4
+        ],
+        [
+          "1d trend blocks paper buy: close=63311.99000000, sma=63527.98000000, return_3d=0.005622477584663174709619951",
+          3
+        ],
+        [
+          "1d trend blocks paper buy: close=62334.52000000, sma=63523.81000000, return_3d=-0.0284780395538024853448442467",
+          3
+        ]
+      ],
+      "closed_trade_count": "8",
+      "fill_count": "16",
+      "win_rate": "0.25",
+      "expectancy": "-4.697841186353571428571428538",
+      "profit_factor": "0.3962588072254089728877785177",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "legacy_rules_fixed_execution",
+      "window": "first_period",
+      "slippage_bps": "5",
+      "strategy": "support_resistance_rebound_v1",
+      "version": "stage-072.v1",
+      "start": "2026-06-11T20:00:00+00:00",
+      "end_exclusive": "2026-08-10T20:00:00+00:00",
+      "observed_test_bars": 1440,
+      "signals": {
+        "hold": 1312,
+        "buy": 72,
+        "sell": 56
+      },
+      "paper_pnl_usdt": "-246.201594844714285714285716",
+      "return_pct": "-2.46201594844714285714285716",
+      "max_drawdown_pct": "2.536283136872033966365950759",
+      "fees_usdt": "144.2385593161428571428571429",
+      "open_btc": "0.00",
+      "buy_hold_gross_pct": "1.028541177691715907913203300",
+      "top_reasons": [
+        [
+          "volume confirmation is below threshold",
+          760
+        ],
+        [
+          "RSI is not in support rebound range",
+          248
+        ],
+        [
+          "price is not close enough to support",
+          198
+        ],
+        [
+          "support rebound with range, RSI, volume, spread, and risk inputs passed",
+          171
+        ],
+        [
+          "range exit: resistance reached or support failed",
+          43
+        ],
+        [
+          "protective stop-loss triggered",
+          13
+        ],
+        [
+          "downtrend regime blocks long swing entries",
+          9
+        ],
+        [
+          "1d trend blocks paper buy: close=62958.01000000, sma=64867.79000000, return_3d=-0.0508185441182811553483452271",
+          9
+        ]
+      ],
+      "closed_trade_count": "56",
+      "fill_count": "112",
+      "win_rate": "0.125",
+      "expectancy": "-4.396457050798469387755102039",
+      "profit_factor": "0.06750083484165030356194437697",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "legacy_rules_fixed_execution",
+      "window": "first_period",
+      "slippage_bps": "10",
+      "strategy": "trend_pullback_v1",
+      "version": "stage-072.v1",
+      "start": "2026-06-11T20:00:00+00:00",
+      "end_exclusive": "2026-08-10T20:00:00+00:00",
+      "observed_test_bars": 1440,
+      "signals": {
+        "hold": 1409,
+        "buy": 20,
+        "sell": 11
+      },
+      "paper_pnl_usdt": "-42.553964471971428571428572",
+      "return_pct": "-0.42553964471971428571428572",
+      "max_drawdown_pct": "0.4986676792482932886026150648",
+      "fees_usdt": "28.08514672911428571428571428",
+      "open_btc": "0.00",
+      "buy_hold_gross_pct": "1.028541177691715907913203300",
+      "top_reasons": [
+        [
+          "volume confirmation is below threshold",
+          932
+        ],
+        [
+          "EMA trend stack is not bullish",
+          249
+        ],
+        [
+          "pullback is not in the planned swing-entry zone",
+          181
+        ],
+        [
+          "uptrend pullback, RSI recovery, volume, spread, and risk inputs passed",
+          37
+        ],
+        [
+          "RSI is not in pullback recovery range",
+          23
+        ],
+        [
+          "downtrend regime blocks long swing entries",
+          9
+        ],
+        [
+          "trend confirmation broke below EMA 21",
+          6
+        ],
+        [
+          "protective take-profit triggered",
+          3
+        ]
+      ],
+      "closed_trade_count": "11",
+      "fill_count": "22",
+      "win_rate": "0.2727272727272727272727272727",
+      "expectancy": "-3.868542224724675324675324673",
+      "profit_factor": "0.3041591855888153428813259508",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "legacy_rules_fixed_execution",
+      "window": "first_period",
+      "slippage_bps": "10",
+      "strategy": "breakout_v1",
+      "version": "stage-072.v1",
+      "start": "2026-06-11T20:00:00+00:00",
+      "end_exclusive": "2026-08-10T20:00:00+00:00",
+      "observed_test_bars": 1440,
+      "signals": {
+        "hold": 1415,
+        "buy": 17,
+        "sell": 8
+      },
+      "paper_pnl_usdt": "-42.756810193385714285714289",
+      "return_pct": "-0.42756810193385714285714289",
+      "max_drawdown_pct": "0.4510678932426409499697467890",
+      "fees_usdt": "20.69631627195714285714285713",
+      "open_btc": "0.00",
+      "buy_hold_gross_pct": "1.028541177691715907913203300",
+      "top_reasons": [
+        [
+          "volume confirmation is below threshold",
+          1070
+        ],
+        [
+          "price has not broken resistance with confirmation",
+          326
+        ],
+        [
+          "resistance breakout with volume, spread, and risk inputs passed",
+          31
+        ],
+        [
+          "downtrend regime blocks long swing entries",
+          9
+        ],
+        [
+          "protective stop-loss triggered",
+          5
+        ],
+        [
+          "1d trend confirms paper buy: close=65746.45000000, sma=64352.61500000, return_3d=0.033326947054183361233357626",
+          4
+        ],
+        [
+          "1d trend blocks paper buy: close=63311.99000000, sma=63527.98000000, return_3d=0.005622477584663174709619951",
+          3
+        ],
+        [
+          "1d trend blocks paper buy: close=62334.52000000, sma=63523.81000000, return_3d=-0.0284780395538024853448442467",
+          3
+        ]
+      ],
+      "closed_trade_count": "8",
+      "fill_count": "16",
+      "win_rate": "0.25",
+      "expectancy": "-5.344601274173214285714285675",
+      "profit_factor": "0.3535322143882049860939666183",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "legacy_rules_fixed_execution",
+      "window": "first_period",
+      "slippage_bps": "10",
+      "strategy": "support_resistance_rebound_v1",
+      "version": "stage-072.v1",
+      "start": "2026-06-11T20:00:00+00:00",
+      "end_exclusive": "2026-08-10T20:00:00+00:00",
+      "observed_test_bars": 1440,
+      "signals": {
+        "hold": 1312,
+        "buy": 72,
+        "sell": 56
+      },
+      "paper_pnl_usdt": "-282.261249595642857142857140",
+      "return_pct": "-2.8226124959564285714285714",
+      "max_drawdown_pct": "2.874999960944289513923733393",
+      "fees_usdt": "144.2385891599285714285714286",
+      "open_btc": "0.00",
+      "buy_hold_gross_pct": "1.028541177691715907913203300",
+      "top_reasons": [
+        [
+          "volume confirmation is below threshold",
+          760
+        ],
+        [
+          "RSI is not in support rebound range",
+          248
+        ],
+        [
+          "price is not close enough to support",
+          198
+        ],
+        [
+          "support rebound with range, RSI, volume, spread, and risk inputs passed",
+          171
+        ],
+        [
+          "range exit: resistance reached or support failed",
+          43
+        ],
+        [
+          "protective stop-loss triggered",
+          13
+        ],
+        [
+          "downtrend regime blocks long swing entries",
+          9
+        ],
+        [
+          "1d trend blocks paper buy: close=62958.01000000, sma=64867.79000000, return_3d=-0.0508185441182811553483452271",
+          9
+        ]
+      ],
+      "closed_trade_count": "56",
+      "fill_count": "112",
+      "win_rate": "0.08928571428571428571428571429",
+      "expectancy": "-5.040379457065051020408163264",
+      "profit_factor": "0.04699312379347861633263213729",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "legacy_rules_fixed_execution",
+      "window": "last_30_days",
+      "slippage_bps": "5",
+      "strategy": "trend_pullback_v1",
+      "version": "stage-072.v1",
+      "start": "2026-08-10T20:00:00+00:00",
+      "end_exclusive": "2026-09-09T20:00:00+00:00",
+      "observed_test_bars": 720,
+      "signals": {
+        "hold": 705,
+        "buy": 8,
+        "sell": 7
+      },
+      "paper_pnl_usdt": "-39.4667555568000",
+      "return_pct": "-0.3946675555680",
+      "max_drawdown_pct": "0.4397726050265305719310687876",
+      "fees_usdt": "21.2589087568000",
+      "open_btc": "0.00",
+      "buy_hold_gross_pct": "21.94012047353358846194790430",
+      "top_reasons": [
+        [
+          "volume confirmation is below threshold",
+          467
+        ],
+        [
+          "EMA trend stack is not bullish",
+          124
+        ],
+        [
+          "pullback is not in the planned swing-entry zone",
+          90
+        ],
+        [
+          "RSI is not in pullback recovery range",
+          20
+        ],
+        [
+          "uptrend pullback, RSI recovery, volume, spread, and risk inputs passed",
+          11
+        ],
+        [
+          "trend confirmation broke below EMA 21",
+          7
+        ],
+        [
+          "1d trend confirms paper buy: close=77734.00000000, sma=76543.02750000, return_3d=0.064482578947116164773369175",
+          3
+        ],
+        [
+          "downtrend regime blocks long swing entries",
+          2
+        ]
+      ],
+      "closed_trade_count": "7",
+      "fill_count": "14",
+      "win_rate": "0.1428571428571428571428571429",
+      "expectancy": "-5.638107936685714285714285714",
+      "profit_factor": "0.02851808484419744170990936818",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "legacy_rules_fixed_execution",
+      "window": "last_30_days",
+      "slippage_bps": "5",
+      "strategy": "breakout_v1",
+      "version": "stage-072.v1",
+      "start": "2026-08-10T20:00:00+00:00",
+      "end_exclusive": "2026-09-09T20:00:00+00:00",
+      "observed_test_bars": 720,
+      "signals": {
+        "hold": 701,
+        "buy": 11,
+        "sell": 8
+      },
+      "paper_pnl_usdt": "16.98895456577142857142856",
+      "return_pct": "0.1698895456577142857142856",
+      "max_drawdown_pct": "0.2584752845832885506803206944",
+      "fees_usdt": "23.76734757708571428571428572",
+      "open_btc": "0.00",
+      "buy_hold_gross_pct": "21.94012047353358846194790430",
+      "top_reasons": [
+        [
+          "volume confirmation is below threshold",
+          522
+        ],
+        [
+          "price has not broken resistance with confirmation",
+          166
+        ],
+        [
+          "resistance breakout with volume, spread, and risk inputs passed",
+          23
+        ],
+        [
+          "protective stop-loss triggered",
+          4
+        ],
+        [
+          "protective take-profit triggered",
+          4
+        ],
+        [
+          "1d trend blocks paper buy: close=77340.01000000, sma=77760.57500000, return_3d=-0.0044024355706598697252902860",
+          4
+        ],
+        [
+          "1d trend blocks paper buy: close=62900.00000000, sma=63130.10750000, return_3d=-0.0093062213994266261316983263",
+          3
+        ],
+        [
+          "1d trend confirms paper buy: close=73025.15000000, sma=67904.36500000, return_3d=0.131609695019997799544722704",
+          3
+        ]
+      ],
+      "closed_trade_count": "8",
+      "fill_count": "16",
+      "win_rate": "0.5",
+      "expectancy": "2.123619320721428571428571462",
+      "profit_factor": "1.321658443227233362761401814",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "legacy_rules_fixed_execution",
+      "window": "last_30_days",
+      "slippage_bps": "5",
+      "strategy": "support_resistance_rebound_v1",
+      "version": "stage-072.v1",
+      "start": "2026-08-10T20:00:00+00:00",
+      "end_exclusive": "2026-09-09T20:00:00+00:00",
+      "observed_test_bars": 720,
+      "signals": {
+        "hold": 662,
+        "buy": 33,
+        "sell": 25
+      },
+      "paper_pnl_usdt": "-99.719830177714285714285711",
+      "return_pct": "-0.99719830177714285714285711",
+      "max_drawdown_pct": "1.005696804938301057972604987",
+      "fees_usdt": "76.17301994914285714285714285",
+      "open_btc": "0.00",
+      "buy_hold_gross_pct": "21.94012047353358846194790430",
+      "top_reasons": [
+        [
+          "volume confirmation is below threshold",
+          385
+        ],
+        [
+          "support rebound with range, RSI, volume, spread, and risk inputs passed",
+          107
+        ],
+        [
+          "RSI is not in support rebound range",
+          105
+        ],
+        [
+          "price is not close enough to support",
+          97
+        ],
+        [
+          "range exit: resistance reached or support failed",
+          20
+        ],
+        [
+          "1d trend blocks paper buy: close=79112.01000000, sma=79736.59000000, return_3d=-0.0068887107167053494461577512",
+          12
+        ],
+        [
+          "1d trend blocks paper buy: close=77439.00000000, sma=77983.07250000, return_3d=-0.0101112105330435894158251310",
+          10
+        ],
+        [
+          "1d trend blocks paper buy: close=80341.83000000, sma=80276.18000000, return_3d=-0.0114253201997234662522146755",
+          9
+        ]
+      ],
+      "closed_trade_count": "25",
+      "fill_count": "50",
+      "win_rate": "0.16",
+      "expectancy": "-3.988793207108571428571428568",
+      "profit_factor": "0.1311969394210115948717197159",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "legacy_rules_fixed_execution",
+      "window": "last_30_days",
+      "slippage_bps": "10",
+      "strategy": "trend_pullback_v1",
+      "version": "stage-072.v1",
+      "start": "2026-08-10T20:00:00+00:00",
+      "end_exclusive": "2026-09-09T20:00:00+00:00",
+      "observed_test_bars": 720,
+      "signals": {
+        "hold": 705,
+        "buy": 8,
+        "sell": 7
+      },
+      "paper_pnl_usdt": "-44.78148653520000",
+      "return_pct": "-0.44781486535200",
+      "max_drawdown_pct": "0.4895894565047927918945791584",
+      "fees_usdt": "21.25891633520000",
+      "open_btc": "0.00",
+      "buy_hold_gross_pct": "21.94012047353358846194790430",
+      "top_reasons": [
+        [
+          "volume confirmation is below threshold",
+          467
+        ],
+        [
+          "EMA trend stack is not bullish",
+          124
+        ],
+        [
+          "pullback is not in the planned swing-entry zone",
+          90
+        ],
+        [
+          "RSI is not in pullback recovery range",
+          20
+        ],
+        [
+          "uptrend pullback, RSI recovery, volume, spread, and risk inputs passed",
+          11
+        ],
+        [
+          "trend confirmation broke below EMA 21",
+          7
+        ],
+        [
+          "1d trend confirms paper buy: close=77734.00000000, sma=76543.02750000, return_3d=0.064482578947116164773369175",
+          3
+        ],
+        [
+          "downtrend regime blocks long swing entries",
+          2
+        ]
+      ],
+      "closed_trade_count": "7",
+      "fill_count": "14",
+      "win_rate": "0.1428571428571428571428571429",
+      "expectancy": "-6.397355219314285714285714286",
+      "profit_factor": "0.008186640892405755474120184683",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "legacy_rules_fixed_execution",
+      "window": "last_30_days",
+      "slippage_bps": "10",
+      "strategy": "breakout_v1",
+      "version": "stage-072.v1",
+      "start": "2026-08-10T20:00:00+00:00",
+      "end_exclusive": "2026-09-09T20:00:00+00:00",
+      "observed_test_bars": 720,
+      "signals": {
+        "hold": 701,
+        "buy": 11,
+        "sell": 8
+      },
+      "paper_pnl_usdt": "11.04714399151428571428572",
+      "return_pct": "0.1104714399151428571428572",
+      "max_drawdown_pct": "0.2828161539306220488388056881",
+      "fees_usdt": "23.76729493705714285714285716",
+      "open_btc": "0.00",
+      "buy_hold_gross_pct": "21.94012047353358846194790430",
+      "top_reasons": [
+        [
+          "volume confirmation is below threshold",
+          522
+        ],
+        [
+          "price has not broken resistance with confirmation",
+          166
+        ],
+        [
+          "resistance breakout with volume, spread, and risk inputs passed",
+          23
+        ],
+        [
+          "protective stop-loss triggered",
+          4
+        ],
+        [
+          "protective take-profit triggered",
+          4
+        ],
+        [
+          "1d trend blocks paper buy: close=77340.01000000, sma=77760.57500000, return_3d=-0.0044024355706598697252902860",
+          4
+        ],
+        [
+          "1d trend blocks paper buy: close=62900.00000000, sma=63130.10750000, return_3d=-0.0093062213994266261316983263",
+          3
+        ],
+        [
+          "1d trend confirms paper buy: close=73025.15000000, sma=67904.36500000, return_3d=0.131609695019997799544722704",
+          3
+        ]
+      ],
+      "closed_trade_count": "8",
+      "fill_count": "16",
+      "win_rate": "0.5",
+      "expectancy": "1.380892998939285714285714325",
+      "profit_factor": "1.197845798708480629347628984",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    },
+    {
+      "group": "legacy_rules_fixed_execution",
+      "window": "last_30_days",
+      "slippage_bps": "10",
+      "strategy": "support_resistance_rebound_v1",
+      "version": "stage-072.v1",
+      "start": "2026-08-10T20:00:00+00:00",
+      "end_exclusive": "2026-09-09T20:00:00+00:00",
+      "observed_test_bars": 720,
+      "signals": {
+        "hold": 662,
+        "buy": 33,
+        "sell": 25
+      },
+      "paper_pnl_usdt": "-118.763077895142857142857142",
+      "return_pct": "-1.18763077895142857142857142",
+      "max_drawdown_pct": "1.187630778951428571428571420",
+      "fees_usdt": "76.17300540942857142857142856",
+      "open_btc": "0.00",
+      "buy_hold_gross_pct": "21.94012047353358846194790430",
+      "top_reasons": [
+        [
+          "volume confirmation is below threshold",
+          385
+        ],
+        [
+          "support rebound with range, RSI, volume, spread, and risk inputs passed",
+          107
+        ],
+        [
+          "RSI is not in support rebound range",
+          105
+        ],
+        [
+          "price is not close enough to support",
+          97
+        ],
+        [
+          "range exit: resistance reached or support failed",
+          20
+        ],
+        [
+          "1d trend blocks paper buy: close=79112.01000000, sma=79736.59000000, return_3d=-0.0068887107167053494461577512",
+          12
+        ],
+        [
+          "1d trend blocks paper buy: close=77439.00000000, sma=77983.07250000, return_3d=-0.0101112105330435894158251310",
+          10
+        ],
+        [
+          "1d trend blocks paper buy: close=80341.83000000, sma=80276.18000000, return_3d=-0.0114253201997234662522146755",
+          9
+        ]
+      ],
+      "closed_trade_count": "25",
+      "fill_count": "50",
+      "win_rate": "0.16",
+      "expectancy": "-4.750523115805714285714285708",
+      "profit_factor": "0.09217795772802051871835374873",
+      "metrics_basis": "completed_positions_after_fees",
+      "expectancy_unit": "USDT_per_closed_trade"
+    }
+  ]
+}

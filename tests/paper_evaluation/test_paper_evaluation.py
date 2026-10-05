@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
@@ -157,6 +157,68 @@ def test_metrics_completed_trade_pairing_and_public_imports() -> None:
 
     assert paper.PaperEvaluationPolicy is PaperEvaluationPolicy
     assert paper.evaluate_paper_promotion_gate is evaluate_paper_promotion_gate
+
+
+def test_entry_and_exit_fees_turn_apparent_win_into_loss() -> None:
+    entry, exit_trade = _profitable_trades(pair_count=1, fee=Decimal("0.2"))
+    trades = (entry, replace(exit_trade, price=Decimal("100.3")))
+    result = evaluate_paper_promotion_gate(
+        _evaluation_input(trades=trades),
+        policy=PaperEvaluationPolicy(min_completed_trades=1),
+    )
+    assert result.metrics.completed_trade_count == 1
+    assert result.metrics.expectancy == Decimal("-0.1000")
+    assert result.metrics.win_rate == 0
+    assert result.metrics.total_fees == Decimal("0.4")
+    assert not result.eligible_for_future_tiny_live_proposal
+    assert any("unstable expectancy" in reason for reason in result.rejection_reasons)
+    assert result.live_trading_locked
+
+
+def test_partial_exits_do_not_inflate_completed_sample_or_ignore_fees() -> None:
+    entry, exit_trade = _profitable_trades(pair_count=1, fee=Decimal("0.2"))
+    trades = (
+        entry,
+        replace(exit_trade, quantity=Decimal("0.4"), fee_paid=Decimal("0.1")),
+        replace(
+            exit_trade,
+            order_intent_id=uuid4(),
+            quantity=Decimal("0.6"),
+            occurred_at=NOW + timedelta(days=2),
+            fee_paid=Decimal("0.1"),
+        ),
+    )
+    result = evaluate_paper_promotion_gate(_evaluation_input(trades=trades))
+    assert result.metrics.completed_trade_count == 1
+    assert result.metrics.expectancy == Decimal("9.6000")
+    assert not result.eligible_for_future_tiny_live_proposal
+    assert any("minimum completed paper trades" in reason for reason in result.rejection_reasons)
+    open_result = evaluate_paper_promotion_gate(_evaluation_input(trades=trades[:2]))
+    assert open_result.metrics.completed_trade_count == 0
+    assert not open_result.eligible_for_future_tiny_live_proposal
+
+
+def test_promotion_metrics_match_shared_closed_position_statistics() -> None:
+    from abtp.paper.trade_metrics import trade_metrics
+
+    trades = _profitable_trades(pair_count=3)
+    expected = trade_metrics(trades)
+    metrics = build_paper_evaluation_metrics(_evaluation_input(trades=tuple(reversed(trades))))
+    assert metrics.completed_trade_count == int(expected["closed_trade_count"])
+    assert metrics.win_rate == Decimal(expected["win_rate"])
+    assert metrics.expectancy == Decimal(expected["expectancy"])
+
+
+@pytest.mark.parametrize("sell_quantity", ["1", "2"])
+def test_incomplete_ledger_cannot_produce_promotion_eligibility(sell_quantity: str) -> None:
+    entry, exit_trade = _profitable_trades(pair_count=1)
+    trades = (
+        (exit_trade,)
+        if sell_quantity == "1"
+        else (entry, replace(exit_trade, quantity=Decimal(sell_quantity)))
+    )
+    with pytest.raises(ValueError, match="without matching entry quantity"):
+        evaluate_paper_promotion_gate(_evaluation_input(trades=trades))
 
 
 def _evaluation_input(

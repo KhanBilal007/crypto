@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
+from sqlite3 import Error as SQLiteError
 
+from abtp.data import normalize_timestamp
 from abtp.domain import OrderIntent, OrderStatus
-from abtp.exchanges import ExchangeAdapter, ExchangeAdapterError, ExchangeMode, ExchangeOrder
+from abtp.exchanges import ExchangeAdapter, ExchangeMode, ExchangeOrder
 from abtp.live.approval import LiveApprovalPolicy, LiveApprovalToken, validate_live_approval
 from abtp.live.preflight import (
     LiveMarketPreflight,
@@ -14,6 +17,7 @@ from abtp.live.preflight import (
     LivePreflightResult,
     run_live_preflight,
 )
+from abtp.live.submissions import LiveSubmissionConflict, LiveSubmissionLedger
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,9 +51,13 @@ class SupervisedLiveTradingGateway:
         *,
         adapter: ExchangeAdapter,
         config: SupervisedLiveGatewayConfig | None = None,
+        submission_ledger: LiveSubmissionLedger | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._adapter = adapter
         self._config = config or SupervisedLiveGatewayConfig()
+        self._ledger = submission_ledger
+        self._clock = clock or (lambda: datetime.now(UTC))
         self._submissions: list[LiveGatewaySubmissionResult] = []
 
     @property
@@ -69,29 +77,73 @@ class SupervisedLiveTradingGateway:
         lock_reason = self._lock_reason()
         if lock_reason is not None:
             return self._record_rejection(lock_reason, preflight=None)
-        preflight = run_live_preflight(
-            intent,
-            market,
-            config=self._config.preflight_config,
-        )
-        if not preflight.allowed:
-            return self._record_rejection("; ".join(preflight.reasons), preflight=preflight)
-        if self._config.manual_approval_required:
-            approval_check = validate_live_approval(
-                intent,
-                approval,
-                now=submitted_at,
-                estimated_notional=preflight.preview.estimated_notional,
-                policy=self._config.approval_policy,
+        if self._ledger is None:
+            return self._record_rejection(
+                "persistent submission ledger is required", preflight=None
             )
-            if not approval_check.allowed:
-                return self._record_rejection(
-                    "; ".join(approval_check.reasons), preflight=preflight
+        now = normalize_timestamp(self._clock())
+        age = now - normalize_timestamp(submitted_at)
+        if (
+            age > self._config.preflight_config.max_market_age
+            or age < -self._config.preflight_config.max_clock_skew
+        ):
+            return self._record_rejection(
+                "submission timestamp is stale or in the future", preflight=None
+            )
+        preflight, reason = self._validate(intent, approval, market, now=now)
+        if reason:
+            return self._record_rejection(reason, preflight=preflight)
+        try:
+            self._ledger.reserve(
+                intent,
+                approval_id=approval.approval_id if approval is not None else None,
+                exchange_name=self._adapter.name,
+                reserved_at=now,
+            )
+        except LiveSubmissionConflict as exc:
+            return self._record_rejection(str(exc), preflight=preflight)
+        except (SQLiteError, OSError, ValueError):
+            return self._record_rejection(
+                "submission ledger unavailable; no order sent", preflight=preflight
+            )
+        # Waiting for durable storage must not let a stale preview or approval through.
+        preflight, reason = self._validate(intent, approval, market, now=self._clock())
+        if reason:
+            try:
+                self._ledger.record_outcome(
+                    intent.id,
+                    exchange_order_id=None,
+                    outcome="not_submitted",
+                    completed_at=self._clock(),
                 )
+            except (SQLiteError, OSError, ValueError):
+                reason += "; submission ledger unavailable; reconciliation required"
+            return self._record_rejection(reason, preflight=preflight)
         try:
             exchange_order = self._adapter.submit_order(intent)
-        except ExchangeAdapterError as exc:
-            return self._record_rejection(str(exc), preflight=preflight)
+        except Exception:
+            # The exchange may have accepted the order before the connection failed.
+            return self._record_rejection(
+                "exchange submission outcome unknown; reconciliation required; do not retry",
+                preflight=preflight,
+            )
+        if exchange_order.intent.id != intent.id or not exchange_order.exchange_order_id:
+            return self._record_rejection(
+                "exchange response mismatch; reconciliation required", preflight=preflight
+            )
+        try:
+            self._ledger.record_outcome(
+                intent.id,
+                exchange_order_id=exchange_order.exchange_order_id,
+                outcome=exchange_order.status.value,
+                completed_at=self._clock(),
+            )
+        except (SQLiteError, OSError, ValueError):
+            return self._record_rejection(
+                "exchange submission attempted but result could not be persisted; "
+                "reconciliation required",
+                preflight=preflight,
+            )
         result = LiveGatewaySubmissionResult(
             accepted=exchange_order.status in {OrderStatus.SUBMITTED, OrderStatus.FILLED},
             status=exchange_order.status,
@@ -102,6 +154,36 @@ class SupervisedLiveTradingGateway:
         )
         self._submissions.append(result)
         return result
+
+    def _validate(
+        self,
+        intent: OrderIntent,
+        approval: LiveApprovalToken | None,
+        market: LiveMarketPreflight,
+        *,
+        now: datetime,
+    ) -> tuple[LivePreflightResult, str]:
+        preflight = run_live_preflight(
+            intent, market, config=self._config.preflight_config, now=now
+        )
+        reasons = list(preflight.reasons)
+        if self._ledger is not None:
+            try:
+                if self._ledger.halt_reason():
+                    reasons.append("execution is halted; operator review is required")
+            except (SQLiteError, OSError, ValueError):
+                reasons.append("submission ledger unavailable; no order sent")
+        if self._config.manual_approval_required or approval is not None:
+            reasons.extend(
+                validate_live_approval(
+                    intent,
+                    approval,
+                    now=now,
+                    estimated_notional=preflight.preview.estimated_notional,
+                    policy=self._config.approval_policy,
+                ).reasons
+            )
+        return preflight, "; ".join(reasons)
 
     def _lock_reason(self) -> str | None:
         if self._adapter.mode is not ExchangeMode.LIVE:

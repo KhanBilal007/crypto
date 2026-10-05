@@ -7,7 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from abtp.domain import OrderIntent, OrderStatus
+from abtp.domain import OrderIntent, OrderSide, OrderStatus
 from abtp.exchanges import (
     ExchangeAdapter,
     ExchangeAdapterError,
@@ -146,8 +146,9 @@ class PaperOrderRouter:
                 fills=(),
                 reason="paper route requires execution_price for market orders",
             )
+        direction = Decimal("1") if request.intent.side is OrderSide.BUY else Decimal("-1")
         adjusted_price = price * (
-            Decimal("1") + self.config.price_adjustment_bps / Decimal("10000")
+            Decimal("1") + direction * self.config.price_adjustment_bps / Decimal("10000")
         )
         filled_quantity = request.intent.quantity * self.config.fill_ratio
         exchange_order_id = f"paper-{request.intent.id}"

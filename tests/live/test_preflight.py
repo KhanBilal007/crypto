@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+
+import pytest
 
 from abtp.domain import (
     Asset,
@@ -15,14 +18,14 @@ from abtp.domain import (
     Signal,
     SignalDirection,
 )
-from abtp.live import LiveMarketPreflight, run_live_preflight
+from abtp.live import LiveMarketPreflight, LivePreflightConfig, run_live_preflight
 from abtp.security import ExchangeKeyPermissions
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def test_preflight_accepts_tiny_risk_approved_trading_only_order() -> None:
-    result = run_live_preflight(_approved_intent(), _market())
+    result = run_live_preflight(_approved_intent(), _market(), now=NOW)
 
     assert result.allowed
     assert result.preview.estimated_notional == Decimal("10.0000")
@@ -33,6 +36,7 @@ def test_preflight_rejects_unsafe_scopes_and_open_position_limit() -> None:
     result = run_live_preflight(
         _approved_intent(),
         _market(scopes=("read", "trade", "withdraw"), open_positions=1),
+        now=NOW,
     )
 
     assert not result.allowed
@@ -50,7 +54,7 @@ def test_preflight_rejects_order_without_approved_risk() -> None:
         signal=_signal(),
     )
 
-    result = run_live_preflight(intent, _market())
+    result = run_live_preflight(intent, _market(), now=NOW)
 
     assert not result.allowed
     assert "order intent cannot bypass risk decision" in result.reasons
@@ -60,11 +64,81 @@ def test_preflight_rejects_large_notional_and_spread() -> None:
     result = run_live_preflight(
         _approved_intent(quantity=Decimal("0.001")),
         _market(spread_bps=Decimal("75")),
+        now=NOW,
     )
 
     assert not result.allowed
     assert "order notional exceeds tiny live risk limit" in result.reasons
     assert "live spread exceeds preflight limit" in result.reasons
+
+
+@pytest.mark.parametrize(
+    "field,label", [("checked_at", "market snapshot"), ("account_checked_at", "account snapshot")]
+)
+@pytest.mark.parametrize(
+    "offset,allowed,reason",
+    [
+        (-30, True, ""),
+        (-31, False, "is stale"),
+        (2, True, ""),
+        (3, False, "timestamp is in the future"),
+    ],
+)
+def test_preflight_market_and_account_freshness(
+    field: str, label: str, offset: int, allowed: bool, reason: str
+) -> None:
+    market = replace(_market(), **{field: NOW + timedelta(seconds=offset)})
+    result = run_live_preflight(_approved_intent(), market, now=NOW)
+    assert result.allowed is allowed
+    if not allowed:
+        assert f"{label} {reason}" in result.reasons
+
+
+@pytest.mark.parametrize("label", ["order intent", "risk decision"])
+@pytest.mark.parametrize(
+    "offset,allowed,reason",
+    [
+        (-300, True, ""),
+        (-301, False, "is stale"),
+        (2, True, ""),
+        (3, False, "timestamp is in the future"),
+    ],
+)
+def test_preflight_risk_and_intent_freshness(
+    label: str, offset: int, allowed: bool, reason: str
+) -> None:
+    intent = _approved_intent()
+    timestamp = NOW + timedelta(seconds=offset)
+    if label == "order intent":
+        intent = replace(intent, created_at=timestamp)
+    else:
+        assert intent.risk_decision is not None
+        intent = replace(
+            intent, risk_decision=replace(intent.risk_decision, evaluated_at=timestamp)
+        )
+    result = run_live_preflight(intent, _market(), now=NOW)
+    assert result.allowed is allowed
+    if not allowed:
+        assert f"{label} {reason}" in result.reasons
+
+
+def test_preflight_uses_current_clock_when_now_is_omitted() -> None:
+    result = run_live_preflight(_approved_intent(), _market())
+    assert not result.allowed
+    assert "market snapshot is stale" in result.reasons
+
+
+@pytest.mark.parametrize(
+    "field", ["max_market_age", "max_account_age", "max_risk_age", "max_intent_age"]
+)
+def test_preflight_rejects_nonpositive_freshness_limits(field: str) -> None:
+    with pytest.raises(ValueError, match="freshness limits"):
+        LivePreflightConfig(**{field: timedelta(0)})
+
+
+def test_preflight_rejects_negative_clock_skew() -> None:
+    with pytest.raises(ValueError, match="max_clock_skew"):
+        LivePreflightConfig(max_clock_skew=timedelta(seconds=-1))
 
 
 def _market(
@@ -87,6 +161,7 @@ def _market(
             ip_allowlist=("203.0.113.10",),
         ),
         checked_at=NOW,
+        account_checked_at=NOW,
     )
 
 

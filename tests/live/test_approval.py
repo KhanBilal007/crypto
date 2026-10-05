@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+
+import pytest
 
 from abtp.domain import (
     Asset,
@@ -15,7 +18,12 @@ from abtp.domain import (
     Signal,
     SignalDirection,
 )
-from abtp.live import LIVE_APPROVAL_CONFIRMATION, LiveApprovalToken, validate_live_approval
+from abtp.live import (
+    LIVE_APPROVAL_CONFIRMATION,
+    LiveApprovalPolicy,
+    LiveApprovalToken,
+    validate_live_approval,
+)
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -64,6 +72,56 @@ def test_live_approval_rejects_expired_or_oversized_orders() -> None:
     assert "approval token is expired" in result.reasons
     assert "order quantity exceeds approved maximum" in result.reasons
     assert "order notional exceeds approved maximum" in result.reasons
+
+
+@pytest.mark.parametrize(
+    "seconds,allowed,reason",
+    [
+        (-1, False, "approval token is not yet valid"),
+        (0, True, ""),
+        (299, True, ""),
+        (300, False, "approval token is expired"),
+    ],
+)
+def test_approval_time_boundaries(seconds: int, allowed: bool, reason: str) -> None:
+    intent = _approved_intent()
+    token = LiveApprovalToken.create(
+        order_intent_id=intent.id,
+        approved_by="operator",
+        approved_at=NOW,
+        max_quantity=intent.quantity,
+        max_notional=Decimal("25"),
+    )
+    result = validate_live_approval(
+        intent, token, now=NOW + timedelta(seconds=seconds), estimated_notional=Decimal("10")
+    )
+    assert result.allowed is allowed
+    if not allowed:
+        assert reason in result.reasons
+
+
+def test_manually_extended_or_old_policy_token_is_rejected() -> None:
+    intent = _approved_intent()
+    token = LiveApprovalToken.create(
+        order_intent_id=intent.id,
+        approved_by="operator",
+        approved_at=NOW,
+        max_quantity=intent.quantity,
+        max_notional=Decimal("25"),
+    )
+    for invalid, policy in (
+        (replace(token, expires_at=NOW + timedelta(days=1)), LiveApprovalPolicy()),
+        (token, LiveApprovalPolicy(ttl=timedelta(minutes=1))),
+    ):
+        result = validate_live_approval(
+            intent,
+            invalid,
+            now=NOW,
+            estimated_notional=Decimal("10"),
+            policy=policy,
+        )
+        assert not result.allowed
+        assert "approval lifetime exceeds policy limit" in result.reasons
 
 
 def _approved_intent(quantity: Decimal = Decimal("0.0001")) -> OrderIntent:
